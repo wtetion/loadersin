@@ -1,6 +1,5 @@
 -- Axel Hub UI entry point.
--- Set AxelHubScriptBase to the raw GitHub folder that contains the two payloads.
--- This loader owns ordering only: Core first, WebLog second.
+-- Core and WebLog are loaded from the two fixed GitHub payload URLs below.
 
 local function sharedEnv()
     local value
@@ -11,10 +10,8 @@ local function sharedEnv()
 end
 
 local env = sharedEnv()
-local base = tostring(rawget(env, "AxelHubScriptBase") or "")
-if base == "" then
-    error("[Axel Hub] Set getgenv().AxelHubScriptBase to your raw GitHub folder URL.", 0)
-end
+local base = tostring(rawget(env, "AxelHubScriptBase")
+    or "https://raw.githubusercontent.com/wtetion/loadersin/refs/heads/main/")
 if not base:match("/$") then base = base .. "/" end
 
 local function loadPayload(fileName)
@@ -34,8 +31,8 @@ local function loadPayload(fileName)
     return chunk()
 end
 
-local core = loadPayload(tostring(rawget(env, "AxelHubCoreFile") or "AxelHub_Functions.luau"))
-local webLog = loadPayload(tostring(rawget(env, "AxelHubWebLogFile") or "AxelWebLog_Loadstring.luau"))
+local core = loadPayload(tostring(rawget(env, "AxelHubCoreFile") or "Function-obfuscated.lua"))
+local webLog = loadPayload(tostring(rawget(env, "AxelHubWebLogFile") or "Weblog-obfuscated.lua"))
 
 return {
     Core = core,
