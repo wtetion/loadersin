@@ -3163,6 +3163,19 @@ local function MoveToPoint(target, speed, easeOut, shouldCancel, arriveRadius, i
         -- HumanoidRootPart, which looks like standing still/warping in place.
         hrp = findHRP()
         if not hrp then return false end
+        -- Keep a lightweight heartbeat for the active Suji route. The
+        -- watchdog uses this to distinguish a real glide from a coroutine
+        -- that was interrupted while the character is standing at the plot.
+        local liveSujiRoute = HUB.SujiRouteState
+        if liveSujiRoute then
+            local now = os.clock()
+            local previousPosition = liveSujiRoute.lastRootPosition
+            if not previousPosition
+                or (hrp.Position - previousPosition).Magnitude >= 0.75 then
+                liveSujiRoute.lastProgressAt = now
+            end
+            liveSujiRoute.lastRootPosition = hrp.Position
+        end
         if HUB.AutoStealMovementActive == true and autoStealEnabled ~= true
             and HUB.StealGlide.owner ~= "rift" and HUB.StealGlide.owner ~= "place"
             and HUB.StealGlide.owner ~= "boss" and not carryingEggReturnActive then
@@ -5724,7 +5737,27 @@ HUB.RecoverStaleAutomationState = function()
     pcall(function() carrying = isPlayerCarryingEgg() == true end)
     if route and not carrying then
         local routeAge = now - (tonumber(route.startedAt) or now)
-        if routeAge >= 30 then
+        local lastProgressAt = tonumber(route.lastProgressAt)
+            or tonumber(route.startedAt)
+            or now
+        local stalledFor = now - lastProgressAt
+        local atLocalPlot = false
+        pcall(function() atLocalPlot = HUB.IsAtLocalPlot(32) == true end)
+        -- A live route updates lastProgressAt from the governed glide. If the
+        -- route has stopped making progress at the local plot, release it
+        -- quickly so the fallback controller can remount Treadmill. Keep a
+        -- longer secondary guard for an orphaned route outside the plot.
+        local orphanedAtPlot = not carryingEggReturnActive
+            and atLocalPlot
+            and routeAge >= 4
+            and stalledFor >= 2
+        local orphanedAnywhere = not carryingEggReturnActive
+            and routeAge >= 12
+            and stalledFor >= 4
+        local staleReturn = carryingEggReturnActive
+            and routeAge >= 8
+            and stalledFor >= 3
+        if orphanedAtPlot or orphanedAnywhere or staleReturn then
             HUB.SujiRouteState = nil
             carryingEggReturnActive = false
             HUB.AutoStealMovementActive = false
@@ -10348,7 +10381,7 @@ HUB.ReleaseAutoStealForFallback = function()
         -- priority worker forever; a live route gets a short grace period.
         local route = HUB.SujiRouteState
         local routeAge = route and (os.clock() - (tonumber(route.startedAt) or os.clock())) or math.huge
-        if route and routeAge < 8 then return false end
+        if route and routeAge < 3 then return false end
         carryingEggReturnActive = false
     end
     HUB.AutoStealMovementActive = false
@@ -11566,6 +11599,9 @@ HUB.SujiStealEgg = function(targetItem)
     local routeState = {
         record = record,
         startedAt = os.clock(),
+        lastProgressAt = os.clock(),
+        lastRootPosition = nil,
+        phase = "starting",
         autoRoute = autoRoute,
         riftRoute = riftRoute,
         controllerEpoch = HUB.AutoStealControllerEpoch,
@@ -11621,6 +11657,7 @@ HUB.SujiStealEgg = function(targetItem)
     end
 
     HUB.AutoStealMovementActive = true
+    routeState.phase = "staging"
     if riftRoute then
         HUB.StartRiftNoClip()
     else
@@ -11683,6 +11720,7 @@ HUB.SujiStealEgg = function(targetItem)
     task.spawn(HUB.SujiCarryPump, routeState)
 
     local moved = false
+    routeState.phase = "outbound"
     for attempt = 1, 3 do
         -- Refresh the same UID before each retry.  The field stream can move
         -- an egg's Position/AreaId after the first scan; Suji follows the
@@ -11785,6 +11823,7 @@ HUB.SujiStealEgg = function(targetItem)
     -- first carry gate; then wait for the live Tool when the build exposes one,
     -- let the guard consume exactly one hit, wait for Humanoid recovery, and
     -- re-carry the same UID before any return movement is allowed.
+    routeState.phase = "carry"
     local carryAcknowledged = routeState.carryDone == true
     local carried = HUB.IsSelectedCarriedEgg(record)
     if not carried and carryAcknowledged then
@@ -11855,6 +11894,7 @@ HUB.SujiStealEgg = function(targetItem)
 
     carryingEggReturnActive = true
     HUB.AutoStealMovementActive = true
+    routeState.phase = "return"
     if _G.AxelWebLog and _G.AxelWebLog.SetActivity then
         pcall(_G.AxelWebLog.SetActivity, "Returning to Base", "Suji route: carrying the selected egg")
     end
@@ -12508,8 +12548,17 @@ function HandleAutoTreadmillHandoff()
     if autoStealEnabled ~= true and not carryingEggReturnActive then
         HUB.ReconcileAutoStealForTreadmill()
     end
-    if HUB.Orchestrator and not HUB.Orchestrator.Allows("treadmill") then
-        return false
+    if HUB.Orchestrator then
+        -- Auto Steal is a desired toggle, not a permanent movement owner. If
+        -- its exact route/carry has cleared, release the one-trip owner in
+        -- this same pass so Treadmill can resume immediately.
+        if HUB.Orchestrator.owner == "steal"
+            and not carryingEggReturnActive
+            and not isPlayerCarryingEgg()
+            and not HUB.SujiRouteState then
+            HUB.Orchestrator.End("steal")
+        end
+        if not HUB.Orchestrator.Allows("treadmill") then return false end
     end
     if IsRiftBossPriorityActive() then
         if treadmillTrainingActive or HUB.IsDoubleSpeedVisible() then
@@ -12566,7 +12615,8 @@ function QueueAutoTreadmillResume()
         -- movement remains higher priority and is intentionally respected.
         if HUB.Orchestrator then
             local owner = HUB.Orchestrator.owner
-            if owner == "steal" and not autoStealEnabled and not carryingEggReturnActive and not HUB.SujiRouteState then
+            if owner == "steal" and not carryingEggReturnActive and not HUB.SujiRouteState
+                and not isPlayerCarryingEgg() then
                 HUB.Orchestrator.End("steal")
             elseif owner == "rift"
                 and type(HUB.IsRiftMovementActive) == "function"
