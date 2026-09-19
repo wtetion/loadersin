@@ -1,7 +1,7 @@
--- Axel Hub UI entry point.
--- Core and WebLog are loaded from the two fixed GitHub payload URLs below.
-
-local CACHE_TTL = 300
+-- Axel Hub split loader.
+-- Keep the movement/UI core in a light build and protect WebLog/Premium
+-- separately. Luraph VM/Anti-Tamper settings are applied to the payloads in
+-- Luraph; this loader only controls ordering and fallback names.
 
 local function sharedEnv()
     local value
@@ -16,55 +16,65 @@ local base = tostring(rawget(env, "AxelHubScriptBase")
     or "https://raw.githubusercontent.com/wtetion/loadersin/refs/heads/main/")
 if not base:match("/$") then base = base .. "/" end
 
-local cache = rawget(env, "AxelHubLoaderCache")
-if type(cache) ~= "table" then cache = {} end
-cache.payloads = type(cache.payloads) == "table" and cache.payloads or {}
-env.AxelHubLoaderCache = cache
-
-local function fetchFresh(url)
-    for attempt = 1, 3 do
-        local separator = string.find(url, "?", 1, true) and "&" or "?"
-        local target = url .. separator .. "cb=" .. tostring(os.time()) .. tostring(math.random(100000, 999999))
-        local ok, source = pcall(function()
-            return game:HttpGet(target, true)
-        end)
-        if ok and type(source) == "string" and #source >= 100 then
-            return source
-        end
-        if attempt < 3 then task.wait(0.25) end
+local function fetch(url)
+    local ok, source = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+    if ok and type(source) == "string" and #source > 100 then
+        return source
     end
     return nil
 end
 
-local function loadPayload(fileName)
-    local now = os.clock()
-    local entry = cache.payloads[fileName]
-    local chunk = entry and entry.chunk
-
-    if not chunk or now - (entry.compiledAt or 0) > CACHE_TTL then
-        local source = fetchFresh(base .. fileName)
-        if type(source) ~= "string" then
-            error("[Axel Hub] Unable to fetch " .. fileName, 0)
+local function loadCandidate(fileName)
+    local lastError = "download failed"
+    for attempt = 1, 3 do
+        local separator = fileName:find("?", 1, true) and "&" or "?"
+        local url = base .. fileName .. separator
+            .. "cb=" .. tostring(os.time()) .. tostring(math.random(100000, 999999))
+        local source = fetch(url)
+        if source then
+            local chunk, compileError = loadstring(source, "@AxelHub/" .. fileName)
+            if type(chunk) == "function" then
+                local ok, result = pcall(chunk)
+                if ok then return true, result end
+                lastError = "runtime error: " .. tostring(result)
+            else
+                lastError = "compile error: " .. tostring(compileError)
+            end
         end
-
-        local compiled, compileError = loadstring(source, "@AxelHub/" .. fileName)
-        source = nil
-        if type(compiled) ~= "function" then
-            error("[Axel Hub] Compile failed for " .. fileName .. ": " .. tostring(compileError), 0)
-        end
-
-        chunk = compiled
-        cache.payloads[fileName] = {
-            chunk = chunk,
-            compiledAt = now,
-        }
+        if attempt < 3 then task.wait(0.25) end
     end
-
-    return chunk()
+    return false, lastError
 end
 
-local core = loadPayload(tostring(rawget(env, "AxelHubCoreFile") or "Function-obfuscated.lua"))
-local webLog = loadPayload(tostring(rawget(env, "AxelHubWebLogFile") or "Weblog-obfuscated.lua"))
+local function candidateList(override, defaults)
+    if type(override) == "string" and override ~= "" then
+        return { override }
+    end
+    return defaults
+end
+
+local coreCandidates = candidateList(rawget(env, "AxelHubCoreFile"), {
+    "Function-obfuscated.lua",
+})
+
+local webLogCandidates = candidateList(rawget(env, "AxelHubWebLogFile"), {
+    "Weblog-obfuscated.lua",
+})
+
+local function loadFromCandidates(candidates, label)
+    local lastError = "unavailable"
+    for _, fileName in ipairs(candidates) do
+        local ok, value = loadCandidate(fileName)
+        if ok then return value end
+        lastError = tostring(value)
+    end
+    error("[Axel Hub] Unable to load " .. label .. ": " .. lastError, 0)
+end
+
+local core = loadFromCandidates(coreCandidates, "Function payload")
+local webLog = loadFromCandidates(webLogCandidates, "WebLog payload")
 
 return {
     Core = core,
