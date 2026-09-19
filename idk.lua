@@ -4880,7 +4880,7 @@ HUB.MarkFieldEggSnapshot = function(snapshot)
     local changed = tracker.signature ~= signature
     tracker.lastAt = now
     tracker.lastGoodAt = now
-    tracker.nextRefreshAt = now + 0.30
+    tracker.nextRefreshAt = now + 0.15
     tracker.dirty = false
     tracker.refreshing = false
     if next(snapshot.Records) ~= nil then tracker.rebuildUntil = 0 end
@@ -4931,7 +4931,7 @@ HUB.IsAutoStealNoMatchSettled = function()
     -- Two short, stable reads are enough to avoid a stale/partial map frame;
     -- keep this below the normal worker interval so a real no-match falls back
     -- to Rift/Treadmill quickly.
-    return os.clock() - state.noMatchSince >= 0.35
+    return os.clock() - state.noMatchSince >= 0.15
 end
 HUB.RequestAutoStealFilterRefresh = function()
     HUB.AutoStealFilterRefreshRequested = true
@@ -5805,7 +5805,7 @@ HUB.IsRiftMovementActive = function()
     -- status. That status is not movement ownership by itself; if no action
     -- refreshed it recently, release it so Auto Steal/Treadmill can continue.
     -- Live acquiring/placing was handled above and remains protected.
-    if lastActionAt > 0 and actionAge <= 5 then
+    if lastActionAt > 0 and actionAge <= 0.75 then
         return true
     end
     rift.status, rift.detail = "waiting", "Rift route timed out; releasing movement"
@@ -7871,7 +7871,7 @@ function stageRiftBossAtSafeCenter(cancelled)
         -- Boss entry must use the same native tween as the combat leg.  The
         -- generic StealGlide route writes CFrame on every heartbeat and can
         -- look like a repeated TP when the arena is streaming.
-        return HUB.TweenRiftBossTo(center, math.min(glideSpeed, 150), cancelled)
+        return HUB.TweenRiftBossTo(center, math.min(glideSpeed, 600), cancelled)
     end)
     HUB.StealGlide.owner = previousOwner
     if not ok or moved ~= true then return false end
@@ -8200,8 +8200,10 @@ HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
         local speedOk, effective = pcall(HUB.StealGlide.EffectiveSpeed, travelSpeed)
         if speedOk and tonumber(effective) then travelSpeed = effective end
     end
-    travelSpeed = math.clamp(travelSpeed, 50, 150)
-    local duration = math.clamp(distance / travelSpeed, 0.25, 8)
+    -- Suji's boss route uses its own effective movement speed (120-600).
+    -- The old 150 cap made a normal arena leg look like a 5-second delay.
+    travelSpeed = math.clamp(travelSpeed, 120, 600)
+    local duration = math.clamp(distance / travelSpeed, 0.08, 4)
     local tweenService = game:GetService("TweenService")
     local tweenOk, tween = pcall(function()
         return tweenService:Create(
@@ -8257,7 +8259,7 @@ HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
     -- was pulled back; the caller will retry from the corrected position and
     -- can then transition to the exact Boss.UpperHand1.R target normally.
     if completed then
-        task.wait(0.08)
+        task.wait(0.03)
         local settledRoot = findHRP()
         if not settledRoot then
             completed = false
@@ -8468,7 +8470,7 @@ function leaveRiftBoss()
                     -- the live Beam from inside the tween.
                     return HUB.TweenRiftBossTo(
                         leaveTarget + Vector3.new(0, 2, 0),
-                        math.min(glideSpeed, 150),
+                        math.min(glideSpeed, 600),
                         function()
                             return LP:GetAttribute("InBossArena") ~= true or HUB.dead
                         end,
@@ -8505,7 +8507,7 @@ function leaveRiftBoss()
             pcall(function() swingBossBat(leaveTarget) end)
         end
         if LP:GetAttribute("InBossArena") ~= true then break end
-        task.wait(0.1)
+        task.wait(0.05)
     end
 
     HUB.StealGlide.owner = previousOwner
@@ -8521,7 +8523,7 @@ function leaveRiftBoss()
                 left = false
                 break
             end
-            task.wait(0.05)
+            task.wait(0.03)
         end
         if HUB.dead then left = false end
     end
@@ -8976,7 +8978,7 @@ function bossCycle(allowActions, expectedEpoch)
                 if not atPortal then
                     atPortal = HUB.TweenRiftBossTo(
                         portalPos + Vector3.new(0, 3, 0),
-                        math.min(glideSpeed, 150),
+                        math.min(glideSpeed, 600),
                         cancelled
                     ) == true
                 end
@@ -9153,7 +9155,7 @@ function bossCycle(allowActions, expectedEpoch)
                 local moveCallOk, moveResult = pcall(
                     HUB.TweenRiftBossTo,
                     approach,
-                    math.min(glideSpeed, 150),
+                    math.min(glideSpeed, 600),
                     cancelled,
                     nil
                 )
@@ -9373,7 +9375,14 @@ task.spawn(function()
         end
         if eventState.boss.shop then pcall(runBossShop) end
         if eventState.boss.claim then pcall(claimBossMilestones) end
-        task.wait(4)
+        -- Keep maintenance responsive while Rift/Boss is enabled.  The old
+        -- four-second sleep was visible as a delayed boss status/target check;
+        -- shop/claim-only sessions can keep the slower maintenance cadence.
+        local maintenanceInterval = (eventState.boss.enabled
+            or eventState.rift.enabled
+            or eventState.boss.shop
+            or eventState.boss.claim) and 0.5 or 4
+        task.wait(maintenanceInterval)
     end
 end)
 
@@ -9907,7 +9916,7 @@ if not HUB.FieldEggScanLoopStarted then
             -- signal are visible without rerunning the script. The reader's
             -- short cache prevents duplicate remote calls from each worker.
             pcall(HUB.ReadSujiFieldEggSnapshot)
-            task.wait(0.2)
+            task.wait(0.12)
         end
         HUB.FieldEggScanLoopStarted = false
     end)
@@ -12143,7 +12152,7 @@ HUB.WaitForTreadmillSpeedRise = function(before, timeout)
         if HUB.IsDoubleSpeedVisible() then return true end
         local after = HUB.ReadTreadmillSpeedState()
         if HUB.TreadmillSpeedRose(before, after) then return true end
-        task.wait(0.12)
+        task.wait(0.06)
     end
     return false
 end
@@ -12367,7 +12376,7 @@ HUB.RunAutoTreadmillTraining = function(controllerEpoch)
         HUB.TreadmillMounted = armed == true
         local speedConfirmed = false
         if armed then
-            speedConfirmed = HUB.WaitForTreadmillSpeedRise(baseline, 0.45) == true
+            speedConfirmed = HUB.WaitForTreadmillSpeedRise(baseline, 0.30) == true
         end
         if armed then
             treadmillTrainingActive = true
@@ -12547,7 +12556,7 @@ function QueueAutoTreadmillResume()
     resume.token = (tonumber(resume.token) or 0) + 1
     local token = resume.token
     task.spawn(function()
-        task.wait(0.2)
+        task.wait(0.08)
         if HUB.dead or token ~= resume.token or not autoTreadmillEnabled then return end
         if autoStealEnabled ~= true and not carryingEggReturnActive then
             pcall(HUB.ReconcileAutoStealForTreadmill)
@@ -13940,7 +13949,7 @@ task.spawn(function()
                 local bossState = eventState.boss
                 local bossNow = os.clock()
                 local bossPriorityActive = IsRiftBossPriorityActive()
-                local bossPollInterval = LP:GetAttribute("InBossArena") == true and 0.16 or 0.35
+                local bossPollInterval = LP:GetAttribute("InBossArena") == true and 0.10 or 0.20
                 local bossPollDue = bossState.enabled == true
                     and bossState.sessionDefeated ~= true
                     and bossNow - (tonumber(bossState.controllerPollAt) or 0) >= bossPollInterval
@@ -13998,7 +14007,7 @@ task.spawn(function()
                     and not eventState.rift.acquiring
                     and not eventState.rift.placing
                     and HUB.SujiRouteState == nil
-                    and os.clock() - (eventState.rift.previewAt or 0) >= 0.45 then
+                    and os.clock() - (eventState.rift.previewAt or 0) >= 0.20 then
                     eventState.rift.previewAt = os.clock()
                     pcall(riftCycle, false)
                 end
@@ -14077,7 +14086,7 @@ task.spawn(function()
                 if not actionTaken and eventState.rift.enabled
                     and HUB.Orchestrator.Allows("rift")
                     and HUB.SujiRouteState == nil
-                    and os.clock() - (eventState.rift.lastActionAt or 0) >= 0.45 then
+                    and os.clock() - (eventState.rift.lastActionAt or 0) >= 0.20 then
                     HUB.Orchestrator.Begin("rift")
                     eventState.rift.lastActionAt = os.clock()
                     local riftOk, riftDidWork = pcall(riftCycle, true)
@@ -14175,7 +14184,19 @@ task.spawn(function()
         -- Keep the controller responsive to a map refresh or a toggle change.
         -- The old sleep used the user steal gap (up to 10s), which made a
         -- perfectly valid re-enable look dead until the script was rerun.
-        local interval = autoTreadmillEnabled and 0.25 or math.min(0.25, tonumber(stealDelay) or 0.25)
+        local bossStatus = tostring(eventState.boss.status or "")
+        local bossMovementLive = eventState.boss.enabled == true
+            and (LP:GetAttribute("InBossArena") == true
+                or bossStatus == "starting"
+                or bossStatus == "joining"
+                or bossStatus == "fighting"
+                or bossStatus == "leaving")
+        local fastAutomationLive = autoStealEnabled == true
+            or autoTreadmillEnabled == true
+            or eventState.rift.enabled == true
+        local interval = bossMovementLive and 0.10
+            or (fastAutomationLive and 0.12
+                or math.min(0.25, tonumber(stealDelay) or 0.25))
         if HUB.AutomationWakeEpoch ~= wakeEpoch then interval = 0.05 end
         task.wait(interval)
     end
