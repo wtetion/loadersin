@@ -2,6 +2,8 @@
 -- Keep the movement/UI core in a light build and protect WebLog/Premium
 -- separately. Luraph VM/Anti-Tamper settings are applied to the payloads in
 -- Luraph; this loader only controls ordering and fallback names.
+getgenv().AxelHubCoreFile = "Function-obfuscated.lua"
+getgenv().AxelHubWebLogFile = "Weblog-obfuscated.lua"
 
 local function sharedEnv()
     local value
