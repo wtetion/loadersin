@@ -6558,7 +6558,9 @@ function riftFindPlacedEgg(requirement, save, used)
         local requestKey = tostring(requestUid)
         if type(egg) == "table" and not (used and (used[key] or used[requestKey])) and riftIsPlacedEgg(egg)
             and riftEggCategoryMatches(egg, requirement) then
-            return requestUid, egg
+            -- Rift placement/hatch remotes use the EggInventory key. Keep the
+            -- record UID only as a lookup alias for older save replicas.
+            return uid, egg
         end
     end
     return nil
@@ -6574,7 +6576,9 @@ function riftFindBagEgg(requirement, save, used)
         local requestKey = tostring(requestUid)
         if type(egg) == "table" and not (used and (used[key] or used[requestKey])) and not riftIsPlacedEgg(egg)
             and egg.Locked ~= true and riftEggCategoryMatches(egg, requirement) then
-            return requestUid, egg
+            -- After Rift trade the record's Uid can differ from the map key;
+            -- the server's RequestPlaceEgg contract is keyed by EggInventory.
+            return uid, egg
         end
     end
     return nil
@@ -6929,7 +6933,10 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
     local distance = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z).Magnitude
     if distance > 35 then return false, "far" end
 
-    local requestUid = recordUid or key or uid
+    -- Prefer the actual EggInventory key. Traded Rift rewards may expose a
+    -- different nested Uid/AssetUid, and sending that alias makes placement
+    -- silently reject an otherwise valid inventory egg.
+    local requestUid = key or recordUid or uid
     local candidates = riftPlacementCandidates(save)
     -- Some game revisions do not expose PetArea/CenterPoint through the plot
     -- adapter even though the official PlantEgg request still works. Keep the
@@ -6953,23 +6960,35 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
         if not placed and tostring(requestUid) ~= wanted then
             placed = requestRiftPlaceEgg(uid, localCFrame)
         end
+        if not placed and recordUid ~= nil and tostring(recordUid) ~= tostring(requestUid) then
+            placed = requestRiftPlaceEgg(recordUid, localCFrame)
+        end
         -- PlantEgg is the canonical client flow on the reference build. Try
         -- the exact UID before doing the slower equip retry; this also works
         -- when the live Tool has not replicated its UID attribute yet.
         if not placed and allowEquip == true and EggState and type(EggState.PlantEgg) == "function" then
-            pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
+            pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
+            if not placed and tostring(requestUid) ~= wanted then
+                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
+            end
         end
         -- Equip at most once per placement operation. Calling equipEggExact on
         -- every candidate multiplied its internal retries and was the reason
         -- a rejected placement held the anti/lease state for ~20 seconds.
         if not placed and allowEquip == true and not equipAttempted then
             equipAttempted = true
-            exactEquipped = equipEggExact(uid) == true
+            exactEquipped = equipEggExact(requestUid) == true
+            if not exactEquipped and tostring(requestUid) ~= wanted then
+                exactEquipped = equipEggExact(uid) == true
+            end
         end
         if not placed and exactEquipped then
-            placed = requestRiftPlaceEgg(uid, localCFrame)
+            placed = requestRiftPlaceEgg(requestUid, localCFrame)
+            if not placed and tostring(requestUid) ~= wanted then
+                placed = requestRiftPlaceEgg(uid, localCFrame)
+            end
             if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
+                pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
             end
         end
 
@@ -6989,9 +7008,12 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
     -- local plot, so it cannot plant a different carried egg.
     if allowEquip == true and EggState and type(EggState.PlantEgg) == "function" then
         local offsets = { CFrame.new(), CFrame.new(2, 0, 0), CFrame.new(-2, 0, 0) }
-        if exactEquipped or (not equipAttempted and equipEggExact(uid)) then
+        if exactEquipped or (not equipAttempted and (equipEggExact(requestUid) or equipEggExact(uid))) then
             for _, offset in ipairs(offsets) do
-                local ok, result = pcall(EggState.PlantEgg, uid, offset)
+                local ok, result = pcall(EggState.PlantEgg, requestUid, offset)
+                if not (ok and result == true) and tostring(requestUid) ~= wanted then
+                    ok, result = pcall(EggState.PlantEgg, uid, offset)
+                end
                 if ok and result == true then
                     return true, "placed"
                 end
@@ -7008,7 +7030,7 @@ end
 function riftPlaceEggInPen(uid, label)
     local rift = eventState.rift
     local save = HUB.ReadRiftInventoryRealtime()
-    local _, egg = getRiftEggInventoryEntry(save, uid)
+    local key, egg, recordUid = getRiftEggInventoryEntry(save, uid)
     if type(egg) ~= "table" then return false, "egg is no longer in the bag" end
     if riftIsPlacedEgg(egg) then return true, "already placed" end
 
@@ -7045,23 +7067,38 @@ function riftPlaceEggInPen(uid, label)
             -- this before the optional equip fallback so a missing/late Tool
             -- visual cannot prevent an egg already present in EggInventory
             -- from being placed for the Rift quest.
-            local placed = requestRiftPlaceEgg(uid, localCFrame)
+            -- Use the EggInventory key first; traded reward records can carry
+            -- a nested Uid that is not the key accepted by RequestPlaceEgg.
+            local requestUid = key or uid
+            local placed = requestRiftPlaceEgg(requestUid, localCFrame)
+            if not placed and tostring(requestUid) ~= tostring(uid) then
+                placed = requestRiftPlaceEgg(uid, localCFrame)
+            end
+            if not placed and recordUid ~= nil and tostring(recordUid) ~= tostring(requestUid) then
+                placed = requestRiftPlaceEgg(recordUid, localCFrame)
+            end
             -- Keep the canonical PlantEgg path available before the optional
             -- equip retry; it can place an inventory UID even while the Tool
             -- replica is one frame behind.
             if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
+                pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
             end
             -- One bounded equip attempt for the whole placement operation,
             -- never once per candidate slot.
             if not placed and not equipAttempted then
                 equipAttempted = true
-                exactEquipped = equipEggExact(uid) == true
+                exactEquipped = equipEggExact(requestUid) == true
+                if not exactEquipped and tostring(requestUid) ~= tostring(uid) then
+                    exactEquipped = equipEggExact(uid) == true
+                end
             end
             if not placed and exactEquipped then
-                placed = requestRiftPlaceEgg(uid, localCFrame)
+                placed = requestRiftPlaceEgg(requestUid, localCFrame)
+                if not placed and tostring(requestUid) ~= tostring(uid) then
+                    placed = requestRiftPlaceEgg(uid, localCFrame)
+                end
                 if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                    pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
+                    pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
                 end
             end
             -- Placement is replicated asynchronously. Wait for the exact UID
@@ -7106,6 +7143,15 @@ HUB.RiftEggLooksLikeRiftEgg = function(egg)
     for _, value in ipairs(names) do
         if value ~= nil then joined[#joined + 1] = string.lower(tostring(value)) end
     end
+    -- Trade rewards are packed differently between builds; the Rift marker is
+    -- often nested under Data/AssetData/Metadata instead of the top-level egg
+    -- record. Reuse the bounded identity walker so an unplaced traded reward
+    -- is discoverable even when its display fields are nested.
+    local nestedValues = {}
+    riftCollectIdentityValues(egg, nestedValues, {}, 0)
+    for _, value in ipairs(nestedValues) do
+        joined[#joined + 1] = string.lower(tostring(value))
+    end
     local text = table.concat(joined, " ")
     return text:find("rift", 1, true) ~= nil and text:find("egg", 1, true) ~= nil
 end
@@ -7123,7 +7169,9 @@ HUB.RiftFindUnplacedRiftEgg = function(save, excluded)
             and not riftIsPlacedEgg(egg)
             and egg.Locked ~= true
             and HUB.RiftEggLooksLikeRiftEgg(egg) then
-            return itemUid, egg
+            -- Pending placement is keyed by EggInventory, not by a nested
+            -- record UID that may be different after a trade.
+            return uid, egg
         end
     end
     return nil
@@ -7248,8 +7296,11 @@ function queueNewRiftRewardEggs(beforeInventory, directRewardUids, maxWait)
             local itemKey = tostring(itemUid)
             if (direct[key] or direct[itemKey] or (not beforeInventory[key] and not beforeInventory[itemKey]))
                 and type(egg) == "table" and not riftIsPlacedEgg(egg)
-                and not rift.pending[itemKey] then
-                rift.pending[itemKey] = true
+                and not rift.pending[key] and not rift.pending[itemKey] then
+                -- Keep the actual EggInventory key as the placement token.
+                -- itemKey remains useful for matching direct reward UIDs, but
+                -- RequestPlaceEgg must receive `key` on traded rewards.
+                rift.pending[key] = true
                 queued += 1
                 lastQueuedAt = os.clock()
             end
@@ -7855,9 +7906,28 @@ function bossArenaTarget(arena)
             return nil
         end)
         if ok and pos then
-            -- Never reject the exact hand because its animated Y is above the
-            -- HumanoidRootPart. riftBossApproachPosition deliberately keeps
-            -- movement on the arena floor while preserving this hand's X/Z.
+            -- Match Suji: an elevated hand is a waiting state, not a movement
+            -- target. The old Axel path grounded every hand position and then
+            -- retweened whenever the animation moved, which made the player
+            -- chase the arm around the arena.
+            local root = findHRP()
+            if root and pos.Y - root.Position.Y >= 14 then
+                return nil, "boss hand up — waiting", true, hand
+            end
+            if root then
+                local away = Vector3.new(
+                    root.Position.X - pos.X,
+                    0,
+                    root.Position.Z - pos.Z
+                )
+                local unit = away.Magnitude > 1 and away.Unit or Vector3.new(1, 0, 0)
+                local sujiTarget = Vector3.new(
+                    pos.X + unit.X * 5,
+                    root.Position.Y,
+                    pos.Z + unit.Z * 5
+                )
+                return sujiTarget, "boss hand", true, hand
+            end
             return pos, "boss hand", true, hand
         end
         return nil, "Boss.UpperHand1.R spawned; waiting for its position"
@@ -7877,9 +7947,12 @@ function riftBossApproachPosition(target, label, root)
     if typeof(target) ~= "Vector3" or not root then return nil end
     local flat = Vector3.new(root.Position.X - target.X, 0, root.Position.Z - target.Z)
     if flat.Magnitude < 0.1 then flat = Vector3.new(0, 0, 1) end
-    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * 9
-    -- Stop short of the hitbox. The bat already has range; exact positioning
-    -- causes needless corrections and can move the avatar through the tower.
+    -- The hand target already contains Suji's 5-stud clearance. Do not add a
+    -- second offset or the player will stop too far away from the hand.
+    local clearance = label == "boss hand" and 0 or 9
+    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * clearance
+    -- Stop short of a crystal hitbox. The bat already has range; exact
+    -- positioning causes needless corrections and can move through the tower.
     return Vector3.new(approach.X, root.Position.Y, approach.Z)
 end
 
@@ -9066,23 +9139,44 @@ function bossCycle(allowActions, expectedEpoch)
     if type(combatLeg) == "table"
         and combatLeg.phase == "boss"
         and typeof(combatLeg.position) == "Vector3" then
-        local liveTarget, liveLabel, _, liveRef = bossArenaTarget(arena)
-        if liveTarget and liveLabel == "boss hand" then
-            local targetChanged = liveRef ~= combatLeg.ref
-                or (liveTarget - combatLeg.position).Magnitude > 8
-            if targetChanged then
-                pcall(function() HUB.CancelRiftBossTween() end)
-                combatLeg.position = liveTarget
-                combatLeg.ref = liveRef
-                combatLeg.moved = false
-            end
-            target, label = liveTarget, liveLabel
-        else
-            -- The hand disappeared or the phase changed. Do not keep the
-            -- player parked at the old hand position indefinitely.
+        local _, liveLabel, _, liveRef = bossArenaTarget(arena)
+        if liveLabel == "boss hand up — waiting" then
+            -- Suji does not chase the raised arm. Drop the completed/active
+            -- hand leg and wait for the next low-hand snapshot to create one
+            -- fresh tween destination.
             pcall(function() HUB.CancelRiftBossTween() end)
             boss.combatLeg = nil
             combatLeg = nil
+            label = liveLabel
+        elseif liveLabel == "boss hand"
+            and (liveRef == nil or combatLeg.ref == nil or liveRef == combatLeg.ref) then
+            -- Freeze the destination for this leg. The hand's animation may
+            -- move the Bone after capture, but it must never cancel and retween
+            -- the player's movement on every animation step.
+            target, label = combatLeg.position, combatLeg.label
+        elseif liveLabel == "boss hand" and liveRef ~= combatLeg.ref then
+            -- A genuinely recreated hand instance is a phase/stream change,
+            -- not an animation update. Rebind on the next controller pass.
+            pcall(function() HUB.CancelRiftBossTween() end)
+            boss.combatLeg = nil
+            combatLeg = nil
+        elseif liveRef ~= nil then
+            -- A live crystal target means the arena phase changed back from
+            -- the hand. Never keep using the old hand leg in that case.
+            pcall(function() HUB.CancelRiftBossTween() end)
+            boss.combatLeg = nil
+            combatLeg = nil
+        else
+            -- Keep a valid captured leg through a short streaming gap. If the
+            -- exact hand instance was actually removed, clear it so the next
+            -- live low-hand read can create a new leg.
+            if combatLeg.ref and combatLeg.ref.Parent then
+                target, label = combatLeg.position, combatLeg.label
+            else
+                pcall(function() HUB.CancelRiftBossTween() end)
+                boss.combatLeg = nil
+                combatLeg = nil
+            end
         end
     else
         local candidate, candidateLabel, _, candidateRef = bossArenaTarget(arena)
@@ -9152,7 +9246,7 @@ function bossCycle(allowActions, expectedEpoch)
     end
     if not target then
         boss.status = "fighting"
-        boss.detail = "Waiting for the live Crystal Tower or Boss.UpperHand1.R target"
+        boss.detail = label or "Waiting for the live Crystal Tower or Boss.UpperHand1.R target"
         publishEvent("The Rift Boss", boss.detail, boss.status)
         return true
     end
