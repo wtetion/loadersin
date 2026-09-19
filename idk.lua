@@ -7638,19 +7638,19 @@ function resolveRiftBeamHitbox(arena, root, towerRoots)
     return nil
 end
 
--- Resolve only the authoritative hand path.  Suji uses the live Bone at
--- Boss -> UpperHand1.R; do not accept a same-named visual Part/Folder because
--- those can stream before the actual animated hand and produce a dead target.
+-- Resolve only the authoritative hand path.  The live game normally exposes
+-- Boss -> UpperHand1 -> R; an older build used a literal `UpperHand1.R`
+-- child.  Check those exact shapes only -- never scan every descendant for a
+-- same-named visual or use the hand's position as a continuous path.
 local function getExactBossHand(bossModel)
     if not bossModel then return nil end
     local upperHand = bossModel:FindFirstChild("UpperHand1")
     local rightHand = upperHand and upperHand:FindFirstChild("R")
-    if rightHand and rightHand:IsA("Bone") then return rightHand end
-    -- The reference client exposes this literal path recursively.  Keep the
-    -- lookup narrow to that one exact Bone; never scan for hand-like visuals
-    -- or use a generic BossHealth object.
-    local exact = bossModel:FindFirstChild("UpperHand1.R", true)
-    return exact and exact:IsA("Bone") and exact or nil
+    if rightHand then return rightHand end
+    -- The reference client uses this literal name recursively.  Keep the
+    -- lookup narrow to that one exact name; do not scan for other hand-like
+    -- parts or use a generic BossHealth object.
+    return bossModel:FindFirstChild("UpperHand1.R", true)
 end
 
 local function getRiftBossModel(arena)
@@ -7765,16 +7765,20 @@ function bossArenaTarget(arena)
         end)
         if guideHitbox and guidePosition then
             local guideHealth = readCrystalHealth(guideHitbox)
-            -- Match Suji's selector: a Beam/Hitbox without a numeric live HP
-            -- value is not proof that a Crystal is still active.  Let the
-            -- CrystalTowers scan below find an explicit Health > 0 Hitbox;
-            -- only then can the hand phase be considered.
-            if guideHealth ~= nil and guideHealth > 0 then
-                return guidePosition, "crystal tower (beam target)", true, guideHitbox
+            -- If the old tower has no replicated numeric HP, do not keep
+            -- striking it after the exact boss hand has spawned.  The hand is
+            -- the phase-two target and the approach function grounds its
+            -- elevated position for the bat swing.
+            if hand and (guideHealth == nil or guideHealth <= 0) then
+                -- Fall through to the exact Boss.UpperHand1.R target below.
+                guidePosition = nil
+            elseif guideHealth == nil or guideHealth > 0 then
+                return guidePosition, "crystal tower (beam target)", guideHealth ~= nil and guideHealth > 0, guideHitbox
             end
-            -- A stale Beam can remain pointed at a destroyed/foreign Hitbox;
-            -- never let that stale guide outrank a live Crystal scan or the
-            -- exact Boss.UpperHand1.R target below.
+            -- A stale Beam can remain pointed at a destroyed Hitbox for a
+            -- few frames. Match the reference flow: do not keep a dead
+            -- Hitbox as a movement target; continue to the live-tower scan,
+            -- then the exact hand if phase two has already streamed in.
         end
 
         -- Suji fallback: only live CrystalTowers/Hitbox parts are eligible,
@@ -7818,14 +7822,9 @@ function bossArenaTarget(arena)
             return nil
         end)
         if ok and pos then
-            -- Match Suji: do not chase an arm that is still above the arena.
-            -- The hand is animated down into range; waiting here lets the
-            -- next controller pass capture its current X/Z instead of freezing
-            -- a stale high position as a combat leg.
-            local root = findHRP()
-            if root and pos.Y - root.Position.Y >= 14 then
-                return nil, "boss hand up — waiting", true, hand
-            end
+            -- Never reject the exact hand because its animated Y is above the
+            -- HumanoidRootPart. riftBossApproachPosition deliberately keeps
+            -- movement on the arena floor while preserving this hand's X/Z.
             return pos, "boss hand", true, hand
         end
         return nil, "Boss.UpperHand1.R spawned; waiting for its position"
@@ -7839,15 +7838,13 @@ function bossArenaTarget(arena)
 end
 
 -- Approach the beam/hand target with horizontal clearance. Crystal combat must
--- use tween movement only. Match Suji by projecting both targets to the
--- HumanoidRootPart's current Y; an elevated hand waits until it descends into
--- range instead of making the player chase it vertically.
+-- use tween movement only: preserve the player's current Y for the whole leg
+-- and never derive a new Y from an animated tower/hand position.
 function riftBossApproachPosition(target, label, root)
     if typeof(target) ~= "Vector3" or not root then return nil end
     local flat = Vector3.new(root.Position.X - target.X, 0, root.Position.Z - target.Z)
     if flat.Magnitude < 0.1 then flat = Vector3.new(0, 0, 1) end
-    local clearance = label == "boss hand" and 5 or 9
-    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * clearance
+    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * 9
     -- Stop short of the hitbox. The bat already has range; exact positioning
     -- causes needless corrections and can move the avatar through the tower.
     return Vector3.new(approach.X, root.Position.Y, approach.Z)
@@ -8023,9 +8020,10 @@ HUB.IsBossArenaDefeated = function(snapshot, arena)
     return boss.armHealthPositiveSeen == true and boss.armHealthZeroSeen == true
 end
 
--- Movement does not chase an elevated hand.  `Boss.UpperHand1.R` is read by
--- the realtime HP proof and refreshed by bossCycle only after it descends into
--- Suji's horizontal combat range; then one grounded tween leg is used.
+-- Movement never polls or follows the hand instance.  `Boss.UpperHand1.R`
+-- is read by the realtime HP proof above; the combat tween is allowed to
+-- finish at its frozen destination, then the next fresh snapshot decides
+-- whether to keep swinging or begin the leave flow.
 
 -- The BatSwing remote only damages the Rift crystal/hand while the Area Bat is
 -- equipped. Equip a tool with IsBat before every attack instead of firing the
@@ -8118,10 +8116,11 @@ end
 -- writes HumanoidRootPart.CFrame each Heartbeat; repeating that near a tower
 -- can look like a TP loop, lift the character, and desync bat hits. This route
 -- has no final snap or precision correction: it tweens once to a horizontal
--- point near the captured target, then stays there and swings until Suji's
--- live target changes. A hand that rises out of range clears the leg and waits
--- for the next descended hand position. The tween keeps the root unanchored
--- so the server does not restore the old position when the phase changes.
+-- point near the captured target, then stays there and swings even if the
+-- beam/hand animation changes. Only a real beam target/phase change creates a
+-- new leg; the hand itself is never a per-frame position target. The tween
+-- keeps the root unanchored so the server does not restore the old position
+-- when the crystal-to-hand leg ends.
 HUB.RiftBossTweenState = HUB.RiftBossTweenState or {
     generation = 0,
     tween = nil,
@@ -8185,8 +8184,9 @@ HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
 
     local root = findHRP()
     if not root then return false end
-    -- Combat is a horizontal tween only.  Suji waits for a high hand to
-    -- descend into range, then projects the target onto the current root Y.
+    -- Combat is a horizontal tween only. GroundY/hand Y is intentionally not
+    -- consulted here: animated Crystal Tower/UpperHand1.R positions can point
+    -- at a ledge or a transient frame and make the avatar float/fall.
     local destination = Vector3.new(target.X, root.Position.Y, target.Z)
     local delta = destination - root.Position
     local horizontalDistance = Vector3.new(delta.X, 0, delta.Z).Magnitude
@@ -9023,28 +9023,28 @@ function bossCycle(allowActions, expectedEpoch)
         end
     end
 
-    -- Capture one movement leg.  `Boss.UpperHand1.R` is an HP authority,
-    -- while Suji refreshes its animated Bone position every pass.  Refresh the
-    -- hand phase here as well: if it rises out of range, clear the old leg and
-    -- wait; when it descends, capture the new horizontal target.
-    -- Crystal targets are held until the beam selects a different target.
+    -- Capture one movement leg.  Keep this patch scoped to boss movement: the
+    -- live hand target is refreshed here, while all other hub features keep
+    -- using their original controllers.
     local combatLeg = boss.combatLeg
     local target, label
     if type(combatLeg) == "table"
         and combatLeg.phase == "boss"
         and typeof(combatLeg.position) == "Vector3" then
-        local candidate, candidateLabel, _, candidateRef = bossArenaTarget(arena)
-        if candidate and candidateLabel == "boss hand" then
-            local targetChanged = candidateRef ~= combatLeg.ref
-                or (candidate - combatLeg.position).Magnitude > 8
+        local liveTarget, liveLabel, _, liveRef = bossArenaTarget(arena)
+        if liveTarget and liveLabel == "boss hand" then
+            local targetChanged = liveRef ~= combatLeg.ref
+                or (liveTarget - combatLeg.position).Magnitude > 8
             if targetChanged then
                 pcall(function() HUB.CancelRiftBossTween() end)
-                combatLeg.position = candidate
-                combatLeg.ref = candidateRef
+                combatLeg.position = liveTarget
+                combatLeg.ref = liveRef
                 combatLeg.moved = false
             end
-            target, label = candidate, candidateLabel
+            target, label = liveTarget, liveLabel
         else
+            -- The hand disappeared or the phase changed. Do not keep the
+            -- player parked at the old hand position indefinitely.
             pcall(function() HUB.CancelRiftBossTween() end)
             boss.combatLeg = nil
             combatLeg = nil
@@ -9052,39 +9052,19 @@ function bossCycle(allowActions, expectedEpoch)
     else
         local candidate, candidateLabel, _, candidateRef = bossArenaTarget(arena)
         if type(combatLeg) == "table" and combatLeg.phase == "crystal" then
-            if candidate and candidateLabel == "boss hand" then
-                -- A live hand is a real phase change.  Drop the completed
-                -- Crystal leg immediately, even if the old CrystalTowers
-                -- container is still streamed in the arena hierarchy.
-                pcall(function() HUB.CancelRiftBossTween() end)
-                boss.combatLeg = nil
-                combatLeg = nil
-                target, label = candidate, candidateLabel
-            elseif candidateLabel == "boss hand up — waiting"
-                or candidateLabel == "Boss.UpperHand1.R spawned; waiting for its position" then
-                -- The crystal phase is over, but Suji deliberately waits for
-                -- the animated hand to descend instead of swinging the dead
-                -- tower or preserving its old movement leg.
-                pcall(function() HUB.CancelRiftBossTween() end)
-                boss.combatLeg = nil
-                combatLeg = nil
-            elseif candidate and candidateRef == combatLeg.ref then
+            if candidate and candidateRef == combatLeg.ref then
                 -- Same Crystal/Hitbox leg: retain the original destination
                 -- even if its beam attachment animates between snapshots.
-                combatLeg.missingSince = nil
                 target, label = combatLeg.position, combatLeg.label
             elseif candidate then
                 -- The beam selected a different Crystal/Hitbox or the hand
                 -- phase began. Start one new tween leg for that real target.
-                pcall(function() HUB.CancelRiftBossTween() end)
                 boss.combatLeg = nil
-                combatLeg = nil
                 target, label = candidate, candidateLabel
             else
-                -- A missing Beam/replica is transient, but an old leg must
-                -- not live forever after a tower dies. Give streaming a short
-                -- grace period, then clear the leg so the next pass can wait
-                -- for UpperHand1.R instead of standing at the dead tower.
+                -- Allow a short streaming grace period, then clear a dead
+                -- Crystal leg. This prevents the character from standing at
+                -- the old tower while the hand target is being replicated.
                 local ref = combatLeg.ref
                 local refDead = not ref or not ref.Parent
                 if ref and ref.Parent then
