@@ -5347,10 +5347,12 @@ eventState = {
         enabled = false, shop = false, claim = false, shopItems = {}, status = "off", detail = "",
         controllerEpoch = 0, controllerPollAt = 0, windowOpen = false, inArena = false,
         hasEnteredArena = false, armPathSeen = false, armHealth = nil, armHealthSource = "", armHealthPositiveSeen = false,
-        armHealthZeroSeen = false, armHealthZeroCandidateRevision = -1, armInstance = nil,
+        armHealthZeroSeen = false, armHealthZeroCandidateRevision = -1,
+        armHealthZeroCandidateAt = 0, armInstance = nil,
         lastHealthAt = 0, leaveCompleted = false,
         hopLocked = false, sessionDefeated = false, defeatedAt = 0, hopAfterLeaveAt = 0,
-        hopQueued = false, hopEnabled = false, hopExplicit = false, hopBusy = false, lastHopAt = 0,
+        hopQueued = false, hopEnabled = false, hopExplicit = false, hopBusy = false,
+        hopScheduleBusy = false, lastHopAt = 0,
         safeStageWindow = "", safeStageAt = 0, roundClosedObserved = false, arenaInstance = nil,
         -- One frozen combat leg.  The hand's position is captured once for
         -- movement; only its HP is sampled again.  This prevents an animated
@@ -5393,17 +5395,19 @@ HUB.RecordRiftBossHealth = function(value, source)
     boss.lastHealthAt = os.clock()
     if active and health > 0 then
         boss.armHealthPositiveSeen = true
+        boss.armHealthZeroSeen = false
         -- A transient/old zero must not survive a later live positive read.
         boss.armHealthZeroCandidateRevision = -1
+        boss.armHealthZeroCandidateAt = 0
     elseif active and health == 0 and boss.armHealthPositiveSeen == true
         and boss.armHealthZeroSeen ~= true then
-        -- One fresh exact-hand zero is enough after a positive sample. The
-        -- previous two-zero candidate gate could miss the transition because
-        -- Rift often destroys/rebuilds the hand or clears the arena flag in
-        -- the frame immediately after HP reaches zero. Round/window reset is
-        -- the stale-state barrier; do not delay the leave handshake here.
-        boss.armHealthZeroSeen = true
-        boss.armHealthZeroCandidateRevision = tonumber(boss.snapshotRevision) or 0
+        -- Match Suji: zero is only a candidate first. The hand UI can briefly
+        -- show 0 while the server is still finishing the phase transition.
+        -- Require a stable zero window before leaving or arming a hop.
+        if (tonumber(boss.armHealthZeroCandidateAt) or 0) <= 0 then
+            boss.armHealthZeroCandidateAt = os.clock()
+            boss.armHealthZeroCandidateRevision = tonumber(boss.snapshotRevision) or 0
+        end
     end
     return health
 end
@@ -5418,6 +5422,7 @@ HUB.ResetRiftBossRoundProof = function(boss)
     boss.armHealthPositiveSeen = false
     boss.armHealthZeroSeen = false
     boss.armHealthZeroCandidateRevision = -1
+    boss.armHealthZeroCandidateAt = 0
     boss.armInstance = nil
     boss.lastHealthAt = 0
     boss.liveSnapshot = nil
@@ -5456,6 +5461,7 @@ HUB.ClearRiftBossHopState = function()
         boss.hopQueued = false
         boss.hopAfterLeaveAt = 0
         boss.hopBusy = false
+        boss.hopScheduleBusy = false
     end
     local state = HUB.ServerHopState
     if state and type(state.HopPermit) == "table"
@@ -7972,28 +7978,45 @@ HUB.IsBossArenaDefeated = function(snapshot, arena)
         or LP:GetAttribute("InBossArena") ~= true then
         return false
     end
-    -- Prefer the exact Boss.UpperHand1.R path. Generic BossHealth and
-    -- HealthShifted snapshots are deliberately ignored here: they can be 0
-    -- while the hand is still spawning and were the source of premature exits.
+    -- Read the exact hand first so a positive sample can arm the round proof.
+    -- Suji also requires the live BossEvent snapshot to report zero before
+    -- treating the hand's local UI value as a completed kill.
     local handHealth = HUB.GetBossHandHealth(arena)
+    local snapshotHealth = tonumber(snapshot.BossHealth)
+    if snapshotHealth == nil or snapshotHealth > 0 then
+        -- Do not carry a local/UI zero forward while the server still reports
+        -- live boss HP; Suji waits for the server snapshot to reach zero too.
+        boss.armHealthZeroSeen = false
+        boss.armHealthZeroCandidateAt = 0
+        return false
+    end
     -- The hand can be destroyed/reparented on the same replication step that
     -- publishes HP=0.  Once this round has already observed the exact
     -- positive -> exact zero transition, allow a very short hand-disappearance
     -- window so the leave worker can run.  Missing R before that proof is
     -- never treated as zero.
     if handHealth == nil then
-        local zeroAge = os.clock() - (tonumber(boss.lastHealthAt) or 0)
-        if boss.armHealthPositiveSeen ~= true
-            or boss.armHealthZeroSeen ~= true
-            or tostring(boss.armHealthSource or "") ~= "Boss.UpperHand1.R"
-            or tonumber(boss.armHealth) ~= 0
-            or zeroAge > 1.5 then
+        if boss.armHealthPositiveSeen ~= true then
             return false
         end
+        local candidateAt = tonumber(boss.armHealthZeroCandidateAt) or 0
+        if candidateAt <= 0 then
+            boss.armHealthZeroCandidateAt = os.clock()
+            return false
+        end
+        if os.clock() - candidateAt < 2 then return false end
+        boss.armHealth = 0
+        boss.armHealthSource = "Boss.UpperHand1.R"
+        boss.armHealthZeroSeen = true
         return true
     end
     HUB.RecordRiftBossHealth(handHealth, "Boss.UpperHand1.R")
     if handHealth ~= 0 then return false end
+    local candidateAt = tonumber(boss.armHealthZeroCandidateAt) or 0
+    if candidateAt <= 0 or os.clock() - candidateAt < 2 then
+        return false
+    end
+    boss.armHealthZeroSeen = true
     return boss.armHealthPositiveSeen == true and boss.armHealthZeroSeen == true
 end
 
@@ -8727,8 +8750,8 @@ function completeRiftBossRun(boss, windowKey, allowActions, inArena)
                 boss.status = "resuming"
                 boss.detail = "Arena exit complete; boss HP is zero; staying in this server"
             end
-            if boss.hopQueued and type(HUB.TriggerRiftBossHop) == "function" then
-                HUB.TriggerRiftBossHop()
+            if boss.hopQueued and type(HUB.ScheduleRiftBossHop) == "function" then
+                HUB.ScheduleRiftBossHop()
             end
         else
             boss.leaveCompleted = false
@@ -8754,8 +8777,8 @@ function completeRiftBossRun(boss, windowKey, allowActions, inArena)
             boss.hopAfterLeaveAt = 0
             boss.status, boss.detail = "resuming", "Boss clear confirmed; staying in this server"
         end
-        if boss.hopQueued and not inArena and type(HUB.TriggerRiftBossHop) == "function" then
-            HUB.TriggerRiftBossHop()
+        if boss.hopQueued and not inArena and type(HUB.ScheduleRiftBossHop) == "function" then
+            HUB.ScheduleRiftBossHop()
         end
     end
     publishEvent("The Rift Boss", boss.detail, boss.status)
@@ -8885,6 +8908,7 @@ function bossCycle(allowActions, expectedEpoch)
             boss.armHealthPositiveSeen = false
             boss.armHealthZeroSeen = false
             boss.armHealthZeroCandidateRevision = -1
+            boss.armHealthZeroCandidateAt = 0
             boss.armInstance = nil
             boss.lastHealthAt = 0
             boss.liveSnapshot = nil
@@ -8910,13 +8934,13 @@ function bossCycle(allowActions, expectedEpoch)
         if boss.sessionDefeated == true then boss.roundClosedObserved = true end
         boss.status, boss.detail = "waiting", "Rift arena window is closed"
         publishEvent("The Rift Boss", boss.detail, boss.status)
-        if boss.hopQueued then HUB.TriggerRiftBossHop() end
+        if boss.hopQueued then HUB.ScheduleRiftBossHop() end
         return false
     end
     if boss.sessionDefeated == true and not inArena then
         boss.status, boss.detail = "resuming", "Boss cleared; staying in this server"
         publishEvent("The Rift Boss", boss.detail, boss.status)
-        if boss.hopQueued then HUB.TriggerRiftBossHop() end
+        if boss.hopQueued then HUB.ScheduleRiftBossHop() end
         return true
     end
     if not inArena and open then
@@ -8926,7 +8950,7 @@ function bossCycle(allowActions, expectedEpoch)
                 and "Boss cleared; waiting for the configured Rift Boss hop delay"
                 or "Boss cleared; staying in this server"
             publishEvent("The Rift Boss", boss.detail, boss.status)
-            if boss.hopQueued then HUB.TriggerRiftBossHop() end
+            if boss.hopQueued then HUB.ScheduleRiftBossHop() end
             return true
         end
         if allowActions and not isPlayerCarryingEgg() and not cancelled() then
@@ -9197,12 +9221,15 @@ function HUB.TriggerRiftBossHop()
     local state = HUB.ServerHopState
     local boss = eventState and eventState.boss
     if not boss or boss.hopExplicit ~= true or boss.hopEnabled ~= true
-        or boss.hopBusy == true or not isBossHopReady(state) then
+        or boss.hopBusy == true then
         if type(HUB.ClearRiftBossHopState) == "function" then
             HUB.ClearRiftBossHopState()
         end
         return false
     end
+    -- Not ready can simply mean the post-defeat delay is still running.
+    -- Preserve the queue so the scheduler can retry instead of clearing it.
+    if not isBossHopReady(state) then return false end
     boss.hopBusy = true
     task.spawn(function()
         if HUB.dead or not boss.enabled or not isBossHopReady(state) then
@@ -9214,6 +9241,30 @@ function HUB.TriggerRiftBossHop()
             boss.hopBusy = false
             boss.hopAfterLeaveAt = os.clock() + 5
         end
+    end)
+    return true
+end
+
+function HUB.ScheduleRiftBossHop()
+    local state = HUB.ServerHopState
+    local boss = eventState and eventState.boss
+    if not boss or boss.hopQueued ~= true or boss.hopScheduleBusy == true then
+        return false
+    end
+    boss.hopScheduleBusy = true
+    local epoch = tonumber(boss.controllerEpoch) or 0
+    task.spawn(function()
+        while not HUB.dead
+            and boss.enabled == true
+            and boss.hopQueued == true
+            and boss.hopBusy ~= true
+            and (tonumber(boss.controllerEpoch) or 0) == epoch do
+            if isBossHopReady(state) and HUB.TriggerRiftBossHop() then
+                break
+            end
+            task.wait(0.25)
+        end
+        boss.hopScheduleBusy = false
     end)
     return true
 end
@@ -13294,6 +13345,7 @@ HUB.ResetTransientAutomationState = function(reason)
             eventState.boss.armHealthPositiveSeen = false
             eventState.boss.armHealthZeroSeen = false
             eventState.boss.armHealthZeroCandidateRevision = -1
+            eventState.boss.armHealthZeroCandidateAt = 0
             eventState.boss.armInstance = nil
             eventState.boss.lastHealthAt = 0
             eventState.boss.liveSnapshot = nil
@@ -15730,6 +15782,7 @@ EventsSub:AddToggle({
         boss.armHealthPositiveSeen = false
         boss.armHealthZeroSeen = false
         boss.armHealthZeroCandidateRevision = -1
+        boss.armHealthZeroCandidateAt = 0
         boss.armInstance = nil
         boss.roundClosedObserved = false
         boss.arenaInstance = nil
@@ -15803,8 +15856,8 @@ EventsSub:AddToggle({
             and LP:GetAttribute("InBossArena") ~= true then
             boss.hopQueued = true
             boss.hopAfterLeaveAt = boss.hopAfterLeaveAt > 0 and boss.hopAfterLeaveAt or os.clock()
-            if type(HUB.TriggerRiftBossHop) == "function" then
-                HUB.TriggerRiftBossHop()
+            if type(HUB.ScheduleRiftBossHop) == "function" then
+                HUB.ScheduleRiftBossHop()
             end
         end
     end)
