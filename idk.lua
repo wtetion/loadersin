@@ -7656,6 +7656,25 @@ local function getExactBossHand(bossModel)
     return bossModel:FindFirstChild("UpperHand1.R", true)
 end
 
+local RIFT_BOSS_HAND_HEIGHT_LIMIT = 14
+local RIFT_BOSS_HAND_DISTANCE = 5
+
+local function getRiftBossInstancePosition(instance)
+    if not instance then return nil end
+    local ok, position = pcall(function()
+        if instance:IsA("Bone") then return instance.TransformedWorldCFrame.Position end
+        if instance:IsA("BasePart") then return instance.Position end
+        if instance:IsA("Attachment") then return instance.WorldPosition end
+        if instance:IsA("Model") then
+            local pivotOk, pivot = pcall(function() return instance:GetPivot() end)
+            if pivotOk and pivot then return pivot.Position end
+        end
+        local part = instance:FindFirstChildWhichIsA("BasePart", true)
+        return part and part.Position or nil
+    end)
+    return ok and position or nil
+end
+
 local function getRiftBossModel(arena)
     local function findBossWithExactHand(root)
         if not root then return nil end
@@ -7812,19 +7831,8 @@ function bossArenaTarget(arena)
     -- The hand target follows the same exact hierarchy as the HP authority.
     -- Never select a same-named visual outside Boss.
     if hand then
-        local ok, pos = pcall(function()
-            if hand:IsA("Bone") then return hand.TransformedWorldCFrame.Position end
-            if hand:IsA("BasePart") then return hand.Position end
-            if hand:IsA("Attachment") then return hand.WorldPosition end
-            if hand:IsA("Model") then
-                local pivotOk, pivot = pcall(function() return hand:GetPivot() end)
-                if pivotOk and pivot then return pivot.Position end
-            end
-            local handPart = hand:FindFirstChildWhichIsA("BasePart", true)
-            if handPart then return handPart.Position end
-            return nil
-        end)
-        if ok and pos then
+        local pos = getRiftBossInstancePosition(hand)
+        if pos then
             -- Never reject the exact hand because its animated Y is above the
             -- HumanoidRootPart. riftBossApproachPosition deliberately keeps
             -- movement on the arena floor while preserving this hand's X/Z.
@@ -7847,9 +7855,10 @@ function riftBossApproachPosition(target, label, root)
     if typeof(target) ~= "Vector3" or not root then return nil end
     local flat = Vector3.new(root.Position.X - target.X, 0, root.Position.Z - target.Z)
     if flat.Magnitude < 0.1 then flat = Vector3.new(0, 0, 1) end
-    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * 9
-    -- Stop short of the hitbox. The bat already has range; exact positioning
-    -- causes needless corrections and can move the avatar through the tower.
+    local clearance = label == "boss hand" and RIFT_BOSS_HAND_DISTANCE or 9
+    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * clearance
+    -- Suji's hand leg stops 5 studs away. Exact positioning causes needless
+    -- corrections and can move the avatar through the tower/hitbox.
     return Vector3.new(approach.X, root.Position.Y, approach.Z)
 end
 
@@ -8133,7 +8142,7 @@ HUB.CancelRiftBossTween = function()
     end
 end
 
-HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
+HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep, arrivalRadius)
     if typeof(target) ~= "Vector3" then return false end
     if not HUB.Orchestrator or HUB.Orchestrator.owner ~= "boss"
         or type(HUB.CanMovementOwnerProceed) ~= "function"
@@ -8178,7 +8187,8 @@ HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
     local horizontalDistance = Vector3.new(delta.X, 0, delta.Z).Magnitude
     local distance = delta.Magnitude
     -- Already close enough to swing; don't micro-correct or snap to the point.
-    if horizontalDistance <= 8 and math.abs(delta.Y) <= 3 then return true end
+    local closeEnough = math.max(1, tonumber(arrivalRadius) or 8)
+    if horizontalDistance <= closeEnough and math.abs(delta.Y) <= 3 then return true end
     if shouldCancel and shouldCancel() then return false end
 
     local travelSpeed = tonumber(speed) or 120
@@ -9010,16 +9020,43 @@ function bossCycle(allowActions, expectedEpoch)
 
     -- Capture one movement leg.  `Boss.UpperHand1.R` is an HP authority,
     -- not a live path/position stream.  Once the hand leg is captured, do not
-    -- ask for its position again; the next realtime snapshot is only for HP.
-    -- Crystal targets are also held until the beam selects a different target.
+    -- ask for its animated position again.  The only valid reasons to create
+    -- a new destination are a different hand Instance or a real phase/target
+    -- change; hand animation alone must never retween the player.
     local combatLeg = boss.combatLeg
     local target, label
+    local candidate, candidateLabel, _, candidateRef
+    local function probeBossTarget()
+        candidate, candidateLabel, _, candidateRef = bossArenaTarget(arena)
+        return candidate, candidateLabel, candidateRef
+    end
+
     if type(combatLeg) == "table"
         and combatLeg.phase == "boss"
         and typeof(combatLeg.position) == "Vector3" then
-        target, label = combatLeg.position, combatLeg.label
+        -- Read only the current hand Instance to detect replacement/phase
+        -- changes. Never read its position here to update the frozen leg.
+        local currentBoss = getRiftBossModel(arena)
+        local currentHand = getExactBossHand(currentBoss)
+        if currentHand == combatLeg.ref then
+            target, label = combatLeg.position, combatLeg.label
+            candidateRef = combatLeg.ref
+        else
+            -- A missing hand can be a short streaming gap. Probe once to tell
+            -- a real Crystal/hand phase change from that gap, but preserve the
+            -- old leg when no new authoritative target exists yet.
+            probeBossTarget()
+            if candidate and (candidateLabel ~= "boss hand" or candidateRef ~= combatLeg.ref) then
+                boss.combatLeg = nil
+                combatLeg = nil
+                target, label = candidate, candidateLabel
+            else
+                target, label = combatLeg.position, combatLeg.label
+                candidateRef = combatLeg.ref
+            end
+        end
     else
-        local candidate, candidateLabel, _, candidateRef = bossArenaTarget(arena)
+        probeBossTarget()
         if type(combatLeg) == "table" and combatLeg.phase == "crystal" then
             if candidate and candidateRef == combatLeg.ref then
                 -- Same Crystal/Hitbox leg: retain the original destination
@@ -9029,33 +9066,53 @@ function bossCycle(allowActions, expectedEpoch)
                 -- The beam selected a different Crystal/Hitbox or the hand
                 -- phase began. Start one new tween leg for that real target.
                 boss.combatLeg = nil
+                combatLeg = nil
                 target, label = candidate, candidateLabel
             else
                 -- A missing Beam/replica is a transient wait state. Keep the
                 -- frozen Crystal leg instead of clearing it and falling back
-                -- to safe position; the next live pass can still discover the
-                -- same tower or the exact hand phase.
+                -- to safe position.
                 target, label = combatLeg.position, combatLeg.label
+                candidateRef = combatLeg.ref
             end
         else
             target, label = candidate, candidateLabel
         end
-        if target then
-            local phase = label == "boss hand" and "boss" or "crystal"
-            combatLeg = boss.combatLeg
-            if type(combatLeg) ~= "table"
-                or combatLeg.phase ~= phase
-                or combatLeg.label ~= label
-                or typeof(combatLeg.position) ~= "Vector3" then
-                combatLeg = {
-                    phase = phase,
-                    position = target,
-                    label = label,
-                    ref = candidateRef,
-                    moved = false,
-                }
-                boss.combatLeg = combatLeg
-            end
+    end
+
+    if target then
+        local phase = label == "boss hand" and "boss" or "crystal"
+        combatLeg = boss.combatLeg
+        if type(combatLeg) ~= "table"
+            or combatLeg.phase ~= phase
+            or combatLeg.label ~= label
+            or combatLeg.ref ~= candidateRef
+            or typeof(combatLeg.position) ~= "Vector3" then
+            combatLeg = {
+                phase = phase,
+                position = target,
+                label = label,
+                ref = candidateRef,
+                moved = false,
+            }
+            boss.combatLeg = combatLeg
+        end
+    end
+
+    -- Suji waits when the live boss hand is more than 14 studs above the
+    -- player. This is a vertical safety gate only; it never changes the frozen
+    -- hand destination and never starts a chase toward the animated hand.
+    if target and label == "boss hand" then
+        local currentBoss = getRiftBossModel(arena)
+        local currentHand = getExactBossHand(currentBoss)
+        local currentHandPosition = getRiftBossInstancePosition(currentHand)
+        local root = findHRP()
+        local handTooHigh = not currentHandPosition or not root
+            or currentHandPosition.Y - root.Position.Y > RIFT_BOSS_HAND_HEIGHT_LIMIT
+        if handTooHigh then
+            boss.status, boss.detail = "waiting", "Waiting for Rift Boss hand to descend"
+            publishEvent("The Rift Boss", boss.detail, boss.status)
+            return true
         end
     end
     if target and allowActions and not cancelled() then
@@ -9092,7 +9149,8 @@ function bossCycle(allowActions, expectedEpoch)
                     approach,
                     math.min(glideSpeed, 150),
                     cancelled,
-                    nil
+                    nil,
+                    combatLeg and combatLeg.phase == "boss" and 1.5 or 8
                 )
                 moveOk = moveCallOk and moveResult == true
                 if moveOk and combatLeg then combatLeg.moved = true end
