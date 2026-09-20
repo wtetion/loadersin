@@ -2854,8 +2854,17 @@ function RefreshFieldEggByUid(uid)
         local ok, snap = pcall(HUB.ReadSujiFieldEggSnapshot, true)
         if ok and type(snap) == "table" and type(snap.Records) == "table" then
             for _, item in ipairs(snap.Records) do
+                local state = item and item.State
+                local carrier = item and (item.CarrierUserId or item.CarrierId or item.CarriedBy)
+                local available = state == "Slot"
+                    or state == "Dropped"
+                    or state == "GuardCarried"
+                    or state == 1
+                local carriedBySelf = (state == "Carried" or state == 2)
+                    and carrier ~= nil
+                    and tostring(carrier) == tostring(LP.UserId)
                 if item and tostring(item.Uid or "") == wantedUid
-                    and (item.State == "Slot" or item.State == "Dropped") then
+                    and (available or carriedBySelf) then
                     return item
                 end
             end
@@ -10661,14 +10670,22 @@ HUB.RestartSujiTeleportFromSafePosition = function(routeState, targetPos, should
     return true
 end
 
-HUB.SujiCarryAttempts = function(record, targetPos, slotKey, shouldCancel)
+HUB.SujiCarryAttempts = function(record, targetPos, slotKey, shouldCancel, strictCarry)
+    local carryConfirmed = function()
+        if not strictCarry then return HUB.IsExactCarriedEgg(record) end
+        local fieldUid = HUB.GetCarriedEggUid()
+        if fieldUid ~= nil then return tostring(fieldUid) == tostring(record.Uid) end
+        local equippedUid = getEquippedEggUid()
+        return equippedUid ~= nil and tostring(equippedUid) == tostring(record.Uid)
+    end
     local lastMessage = "carry rejected"
     for attempt = 1, 16 do
         if shouldCancel and shouldCancel() then return false, "aborted" end
-        if HUB.IsExactCarriedEgg(record) then return true end
+        if carryConfirmed() then return true end
 
         local ok, message = HUB.SujiCarryFieldEgg(record.Uid, slotKey)
-        if ok or HUB.IsExactCarriedEgg(record) then return true end
+        if ok and not strictCarry then return true end
+        if carryConfirmed() then return true end
         lastMessage = tostring(message or lastMessage)
 
         -- Suji retries the physical CarryAreaEgg prompt after the UID
@@ -10680,7 +10697,7 @@ HUB.SujiCarryAttempts = function(record, targetPos, slotKey, shouldCancel)
             prompt.HoldDuration = 0
             pcall(function() fireproximityprompt(prompt) end)
             task.wait(0.08)
-            if HUB.IsExactCarriedEgg(record) then return true end
+            if carryConfirmed() then return true end
         end
 
         local lowerMessage = string.lower(lastMessage)
@@ -11022,11 +11039,9 @@ end
 -- after Anti Guard: the first hit can finish its ragdoll while the guard is
 -- still alerted, which produces the reported two-hit/drop cycle.
 HUB.WaitForSujiGuardSleep = function(record, targetPos)
-    -- The Humanoid recovery gate below already proves the ragdoll is over.
-    -- Keep only a short guard-idle debounce here; the old 1s minimum made
-    -- every successful re-carry feel slow even when the guard was already
-    -- back at its EggPoint.
-    local minimumAt = os.clock() + 0.45
+    -- The Humanoid recovery gate proves the player is standing.  Do not add a
+    -- guessed cooldown here; wait for the guard's actual idle signals instead.
+    local minimumAt = os.clock()
     local deadline = os.clock() + 2.5
     while os.clock() < deadline and not HUB.dead do
         local asleep = true
@@ -11130,7 +11145,7 @@ end
 -- being sent while the character is still ragdolled.
 HUB.WaitForSujiHumanoidRecovery = function(minimumAt, timeout)
     local deadline = os.clock() + (tonumber(timeout) or 3.5)
-    local stable = 0
+    local stableSince
     local notBefore = tonumber(minimumAt) or 0
     while os.clock() < deadline and not HUB.dead do
         local hum = findHum()
@@ -11152,19 +11167,12 @@ HUB.WaitForSujiHumanoidRecovery = function(minimumAt, timeout)
             and Vector3.new(velocity.X, 0, velocity.Z).Magnitude <= 24
             and (LP:GetAttribute("RagdollEndTime") == nil or ragdollLeft <= -0.7)
         if ready and os.clock() >= notBefore then
-            stable += 1
-            if stable >= 4 then
-                pcall(function()
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    hum.Jump = false
-                    hum:Move(Vector3.zero, false)
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
-                end)
-                return true
-            end
+            stableSince = stableSince or os.clock()
+            -- Require a real standing window, not one lucky frame after the
+            -- ragdoll flag disappears.  This is the carry boundary.
+            if os.clock() - stableSince >= 0.24 then return true end
         else
-            stable = 0
+            stableSince = nil
         end
         task.wait(0.06)
     end
@@ -11191,6 +11199,12 @@ HUB.SujiGuardHitOnce = function(record, targetPos, slotKey, carryAcknowledged)
         local carriedUid = HUB.GetCarriedEggUid()
         if carriedUid ~= nil then return tostring(carriedUid) == wantedUid end
         return true
+    end
+    local selectedUidVisible = function()
+        local fieldUid = HUB.GetCarriedEggUid()
+        if fieldUid ~= nil then return tostring(fieldUid) == wantedUid end
+        local equippedUid = getEquippedEggUid()
+        return equippedUid ~= nil and tostring(equippedUid) == wantedUid
     end
     if not selectedEggCarried() then
         -- The carry remote can acknowledge the UID before the Character
@@ -11232,6 +11246,7 @@ HUB.SujiGuardHitOnce = function(record, targetPos, slotKey, carryAcknowledged)
     local startHealth = hum and tonumber(hum.Health) or 100
     local oldRagdollEnd = LP:GetAttribute("RagdollEndTime")
     local hit = false
+    local postGuardSettleDone = false
     local watchUntil = os.clock() + 4.0
     while not hit and os.clock() < watchUntil and not HUB.dead do
         if not selectedEggCarried() then
@@ -11268,29 +11283,34 @@ HUB.SujiGuardHitOnce = function(record, targetPos, slotKey, carryAcknowledged)
     end
 
     if not hit then
-        -- A guard is not present in every area/build. If the exact carry is
-        -- still live after the same bounded Suji observation window, it is safe
-        -- to deliver it; only a missing carry is a failed route. This avoids
-        -- the old grab->release->return path while preserving normal areas
-        -- where no guard hit is generated.
-        restoreAntiRagdoll()
-        if selectedEggCarried() then return true, "no-hit" end
-        return false, "no-hit-carry-lost"
+        -- Some builds do not expose the ragdoll signal/attribute to the
+        -- client. Do not return from this branch immediately: that skipped
+        -- the post-hit wait and sent the player home while the UID was still
+        -- being restored. Give the server the same three-second settle window.
+        task.wait(1.5)
+        postGuardSettleDone = true
+        if HUB.dead then
+            restoreAntiRagdoll()
+            return false, "guard-wait-dead"
+        end
+        -- If the exact carry is still live, there is no re-carry to perform.
+        -- When it is gone, continue through the normal refresh/re-carry path
+        -- below instead of handing control to the outer Safe Center fallback.
+        if selectedEggCarried() and selectedUidVisible() then
+            restoreAntiRagdoll()
+            return true, "no-hit"
+        end
+        hit = true
     end
 
     -- This is the Suji knockback boundary. Never move or clear ragdoll before
     -- the server has finished it. If the live timer exists, use it as the
     -- clock instead of adding a fixed 0.65s delay; the recovery gate below
     -- still refuses to re-carry until the Humanoid is fully standing.
-    local ragdollLeftNow = HUB.SujiRagdollLeft()
-    if ragdollLeftNow > 0 then
-        task.wait(math.min(math.max(ragdollLeftNow + 0.06, 0.12), 0.4))
-    else
-        task.wait(0.12)
-    end
-    -- Some revisions report Humanoid.Running before the server ragdoll timer
-    -- expires.  Wait for that timer as well as the Humanoid state; otherwise
-    -- the re-carry handshake can be sent while the guard is still attacking.
+    -- Do not sleep for a guessed ragdoll duration.  The recovery gate below
+    -- waits on the server timer, Humanoid state, grounding, and velocity.
+    -- Some revisions report Humanoid.Running before the timer expires, so the
+    -- carry handshake is not allowed until the complete standing check passes.
     local ragdollAttribute = LP:GetAttribute("RagdollEndTime")
     if ragdollAttribute ~= nil and HUB.SujiRagdollLeft() > -0.7 then
         local ragdollDeadline = os.clock() + 3.5
@@ -11317,28 +11337,33 @@ HUB.SujiGuardHitOnce = function(record, targetPos, slotKey, carryAcknowledged)
             and currentState ~= Enum.HumanoidStateType.FallingDown then
             break
         end
-        pcall(function()
-            currentHumanoid.PlatformStand = false
-            currentHumanoid.AutoRotate = true
-            currentHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-        end)
         task.wait(0.12)
     end
     -- Do not use FloorMaterial as the only reset gate.  Auto Steal no-clip
     -- can legitimately report Air while the character is standing; wait for
     -- the Humanoid state, ragdoll timer, and velocity to be stable together.
-    local recovered = HUB.WaitForSujiHumanoidRecovery(os.clock() + 0.15, 3.8)
+    local recovered = HUB.WaitForSujiHumanoidRecovery(os.clock(), 5.0)
     if not recovered then
         restoreAntiRagdoll()
         return false, "humanoid-not-recovered"
     end
-    task.wait(0.05)
-    pcall(HUB.StealGlide.StabilizeAfterGuardHit)
+    -- Recovery has already been confirmed by the standing gate. Do not write
+    -- Running/velocity again while the server is finishing the knockback.
+    task.wait(0.08)
     if HUB.dead then
         restoreAntiRagdoll()
         return false
     end
     pcall(HUB.WaitForSujiGuardSleep, record, targetPos)
+    if HUB.dead then
+        restoreAntiRagdoll()
+        return false
+    end
+
+    -- The updated guard can keep the ragdoll/egg replication boundary alive
+    -- after the Humanoid first looks recovered.  Give the server the requested
+    -- 1.5-second settle window before refreshing and carrying this UID.
+    if not postGuardSettleDone then task.wait(1.5) end
     if HUB.dead then
         restoreAntiRagdoll()
         return false
@@ -11360,14 +11385,22 @@ HUB.SujiGuardHitOnce = function(record, targetPos, slotKey, carryAcknowledged)
         return false
     end
 
-    -- Re-read the same UID after the drop. Suji uses the refreshed dropped
-    -- position for the next carry handshake; retrying against the first scan's
-    -- coordinate is what made Axel request the carry while still out of range.
-    local refreshed = RefreshFieldEggByUid(record.Uid)
-    if refreshed then
-        record = refreshed
-        targetPos = HUB.SujiEggPosition(refreshed, targetPos)
+    -- Re-read the same UID after the drop. Do not continue with the stale
+    -- position when the post-ragdoll snapshot is still propagating; that race
+    -- is what made the carry succeed only on some guard hits.
+    local refreshed
+    local refreshDeadline = os.clock() + 5.0
+    while os.clock() < refreshDeadline and not HUB.dead do
+        refreshed = RefreshFieldEggByUid(record.Uid)
+        if refreshed then break end
+        task.wait(0.12)
     end
+    if not refreshed then
+        restoreAntiRagdoll()
+        return false, "uid-not-replicated"
+    end
+    record = refreshed
+    targetPos = HUB.SujiEggPosition(refreshed, targetPos)
     local root = findHRP()
     if root and typeof(targetPos) == "Vector3"
         and Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z).Magnitude > 8 then
@@ -11392,16 +11425,28 @@ HUB.SujiGuardHitOnce = function(record, targetPos, slotKey, carryAcknowledged)
     -- Re-carry the exact UID only after the ragdoll boundary and refreshed
     -- position are valid.  Suji's retry helper refreshes the live record and
     -- repositions only when the server says the request is too far away.
-    local recarried = select(1, HUB.SujiCarryAttempts(record, targetPos, slotKey, function()
-        return HUB.dead == true or HUB.SujiRagdollLeft() > 0
-    end))
-    local confirmDeadline = os.clock() + 0.8
-    while os.clock() < confirmDeadline and not HUB.dead do
-        if selectedEggCarried() then break end
-        task.wait(0.05)
+    -- A successful remote response is only an acknowledgement.  Require the
+    -- same UID to be visible on the field/tool, and resend the same carry a
+    -- few times if replication is late instead of returning with empty hands.
+    local recarried = false
+    local waitForSelectedUid = function(timeout)
+        local deadline = os.clock() + timeout
+        while os.clock() < deadline and not HUB.dead do
+            if selectedUidVisible() then return true end
+            task.wait(0.06)
+        end
+        return selectedUidVisible()
+    end
+    for carryTry = 1, 3 do
+        recarried = select(1, HUB.SujiCarryAttempts(record, targetPos, slotKey, function()
+            return HUB.dead == true or HUB.SujiRagdollLeft() > 0
+        end, true)) == true
+        if recarried and waitForSelectedUid(3.0) then break end
+        recarried = false
+        if carryTry < 3 then task.wait(0.15) end
     end
     restoreAntiRagdoll()
-    if recarried == true and selectedEggCarried() then
+    if recarried == true and selectedEggCarried() and selectedUidVisible() then
         return true, "recarried"
     end
     return false, "recarry-failed"
@@ -11698,11 +11743,13 @@ HUB.SujiStealEgg = function(targetItem)
         carried = select(1, HUB.SujiCarryAttempts(record, targetPos, routeState.slotKey, routeCancelled))
     end
     local guardRetryAfterCarryReplication = false
+    local guardAttempted = false
     if carried and type(HUB.SujiGuardHitOnce) == "function" then
         -- Do not gate the guard phase on the field CarrierUserId alone.  Suji
         -- starts the one-hit wait as soon as the carry handshake is accepted;
         -- the Tool/replica can appear a frame later.  The guard helper still
         -- refuses to proceed without live carry evidence.
+        guardAttempted = true
         local guardHandled, guardReason = HUB.SujiGuardHitOnce(record, targetPos, routeState.slotKey, carryAcknowledged)
         if not guardHandled then
             carried = false
@@ -11718,7 +11765,8 @@ HUB.SujiStealEgg = function(targetItem)
     -- After the guard hit the field replica may briefly remove the Tool.  The
     -- guard helper normally re-carries it, but keep the same UID retry here as
     -- the final delivery gate; never substitute a nearby egg.
-    if not carried and (moved or carryAcknowledged) then
+    if not carried and (moved or carryAcknowledged)
+        and (not guardAttempted or guardRetryAfterCarryReplication) then
         for recovery = 1, 2 do
             if HUB.dead then break end
             local recarried = HUB.SujiReCarryEgg(record, targetPos, routeState.slotKey)
