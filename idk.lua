@@ -3163,19 +3163,6 @@ local function MoveToPoint(target, speed, easeOut, shouldCancel, arriveRadius, i
         -- HumanoidRootPart, which looks like standing still/warping in place.
         hrp = findHRP()
         if not hrp then return false end
-        -- Keep a lightweight heartbeat for the active Suji route. The
-        -- watchdog uses this to distinguish a real glide from a coroutine
-        -- that was interrupted while the character is standing at the plot.
-        local liveSujiRoute = HUB.SujiRouteState
-        if liveSujiRoute then
-            local now = os.clock()
-            local previousPosition = liveSujiRoute.lastRootPosition
-            if not previousPosition
-                or (hrp.Position - previousPosition).Magnitude >= 0.75 then
-                liveSujiRoute.lastProgressAt = now
-            end
-            liveSujiRoute.lastRootPosition = hrp.Position
-        end
         if HUB.AutoStealMovementActive == true and autoStealEnabled ~= true
             and HUB.StealGlide.owner ~= "rift" and HUB.StealGlide.owner ~= "place"
             and HUB.StealGlide.owner ~= "boss" and not carryingEggReturnActive then
@@ -4893,7 +4880,7 @@ HUB.MarkFieldEggSnapshot = function(snapshot)
     local changed = tracker.signature ~= signature
     tracker.lastAt = now
     tracker.lastGoodAt = now
-    tracker.nextRefreshAt = now + 0.15
+    tracker.nextRefreshAt = now + 0.30
     tracker.dirty = false
     tracker.refreshing = false
     if next(snapshot.Records) ~= nil then tracker.rebuildUntil = 0 end
@@ -4944,7 +4931,7 @@ HUB.IsAutoStealNoMatchSettled = function()
     -- Two short, stable reads are enough to avoid a stale/partial map frame;
     -- keep this below the normal worker interval so a real no-match falls back
     -- to Rift/Treadmill quickly.
-    return os.clock() - state.noMatchSince >= 0.15
+    return os.clock() - state.noMatchSince >= 0.35
 end
 HUB.RequestAutoStealFilterRefresh = function()
     HUB.AutoStealFilterRefreshRequested = true
@@ -5360,12 +5347,10 @@ eventState = {
         enabled = false, shop = false, claim = false, shopItems = {}, status = "off", detail = "",
         controllerEpoch = 0, controllerPollAt = 0, windowOpen = false, inArena = false,
         hasEnteredArena = false, armPathSeen = false, armHealth = nil, armHealthSource = "", armHealthPositiveSeen = false,
-        armHealthZeroSeen = false, armHealthZeroCandidateRevision = -1,
-        armHealthZeroCandidateAt = 0, armInstance = nil,
+        armHealthZeroSeen = false, armHealthZeroCandidateRevision = -1, armInstance = nil,
         lastHealthAt = 0, leaveCompleted = false,
         hopLocked = false, sessionDefeated = false, defeatedAt = 0, hopAfterLeaveAt = 0,
-        hopQueued = false, hopEnabled = false, hopExplicit = false, hopBusy = false,
-        hopScheduleBusy = false, lastHopAt = 0,
+        hopQueued = false, hopEnabled = false, hopExplicit = false, hopBusy = false, lastHopAt = 0,
         safeStageWindow = "", safeStageAt = 0, roundClosedObserved = false, arenaInstance = nil,
         -- One frozen combat leg.  The hand's position is captured once for
         -- movement; only its HP is sampled again.  This prevents an animated
@@ -5408,19 +5393,17 @@ HUB.RecordRiftBossHealth = function(value, source)
     boss.lastHealthAt = os.clock()
     if active and health > 0 then
         boss.armHealthPositiveSeen = true
-        boss.armHealthZeroSeen = false
         -- A transient/old zero must not survive a later live positive read.
         boss.armHealthZeroCandidateRevision = -1
-        boss.armHealthZeroCandidateAt = 0
     elseif active and health == 0 and boss.armHealthPositiveSeen == true
         and boss.armHealthZeroSeen ~= true then
-        -- Match Suji: zero is only a candidate first. The hand UI can briefly
-        -- show 0 while the server is still finishing the phase transition.
-        -- Require a stable zero window before leaving or arming a hop.
-        if (tonumber(boss.armHealthZeroCandidateAt) or 0) <= 0 then
-            boss.armHealthZeroCandidateAt = os.clock()
-            boss.armHealthZeroCandidateRevision = tonumber(boss.snapshotRevision) or 0
-        end
+        -- One fresh exact-hand zero is enough after a positive sample. The
+        -- previous two-zero candidate gate could miss the transition because
+        -- Rift often destroys/rebuilds the hand or clears the arena flag in
+        -- the frame immediately after HP reaches zero. Round/window reset is
+        -- the stale-state barrier; do not delay the leave handshake here.
+        boss.armHealthZeroSeen = true
+        boss.armHealthZeroCandidateRevision = tonumber(boss.snapshotRevision) or 0
     end
     return health
 end
@@ -5435,7 +5418,6 @@ HUB.ResetRiftBossRoundProof = function(boss)
     boss.armHealthPositiveSeen = false
     boss.armHealthZeroSeen = false
     boss.armHealthZeroCandidateRevision = -1
-    boss.armHealthZeroCandidateAt = 0
     boss.armInstance = nil
     boss.lastHealthAt = 0
     boss.liveSnapshot = nil
@@ -5474,7 +5456,6 @@ HUB.ClearRiftBossHopState = function()
         boss.hopQueued = false
         boss.hopAfterLeaveAt = 0
         boss.hopBusy = false
-        boss.hopScheduleBusy = false
     end
     local state = HUB.ServerHopState
     if state and type(state.HopPermit) == "table"
@@ -5737,27 +5718,7 @@ HUB.RecoverStaleAutomationState = function()
     pcall(function() carrying = isPlayerCarryingEgg() == true end)
     if route and not carrying then
         local routeAge = now - (tonumber(route.startedAt) or now)
-        local lastProgressAt = tonumber(route.lastProgressAt)
-            or tonumber(route.startedAt)
-            or now
-        local stalledFor = now - lastProgressAt
-        local atLocalPlot = false
-        pcall(function() atLocalPlot = HUB.IsAtLocalPlot(32) == true end)
-        -- A live route updates lastProgressAt from the governed glide. If the
-        -- route has stopped making progress at the local plot, release it
-        -- quickly so the fallback controller can remount Treadmill. Keep a
-        -- longer secondary guard for an orphaned route outside the plot.
-        local orphanedAtPlot = not carryingEggReturnActive
-            and atLocalPlot
-            and routeAge >= 4
-            and stalledFor >= 2
-        local orphanedAnywhere = not carryingEggReturnActive
-            and routeAge >= 12
-            and stalledFor >= 4
-        local staleReturn = carryingEggReturnActive
-            and routeAge >= 8
-            and stalledFor >= 3
-        if orphanedAtPlot or orphanedAnywhere or staleReturn then
+        if routeAge >= 30 then
             HUB.SujiRouteState = nil
             carryingEggReturnActive = false
             HUB.AutoStealMovementActive = false
@@ -5838,7 +5799,7 @@ HUB.IsRiftMovementActive = function()
     -- status. That status is not movement ownership by itself; if no action
     -- refreshed it recently, release it so Auto Steal/Treadmill can continue.
     -- Live acquiring/placing was handled above and remains protected.
-    if lastActionAt > 0 and actionAge <= 0.75 then
+    if lastActionAt > 0 and actionAge <= 5 then
         return true
     end
     rift.status, rift.detail = "waiting", "Rift route timed out; releasing movement"
@@ -6558,9 +6519,7 @@ function riftFindPlacedEgg(requirement, save, used)
         local requestKey = tostring(requestUid)
         if type(egg) == "table" and not (used and (used[key] or used[requestKey])) and riftIsPlacedEgg(egg)
             and riftEggCategoryMatches(egg, requirement) then
-            -- Rift placement/hatch remotes use the EggInventory key. Keep the
-            -- record UID only as a lookup alias for older save replicas.
-            return uid, egg
+            return requestUid, egg
         end
     end
     return nil
@@ -6576,9 +6535,7 @@ function riftFindBagEgg(requirement, save, used)
         local requestKey = tostring(requestUid)
         if type(egg) == "table" and not (used and (used[key] or used[requestKey])) and not riftIsPlacedEgg(egg)
             and egg.Locked ~= true and riftEggCategoryMatches(egg, requirement) then
-            -- After Rift trade the record's Uid can differ from the map key;
-            -- the server's RequestPlaceEgg contract is keyed by EggInventory.
-            return uid, egg
+            return requestUid, egg
         end
     end
     return nil
@@ -6933,10 +6890,7 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
     local distance = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z).Magnitude
     if distance > 35 then return false, "far" end
 
-    -- Prefer the actual EggInventory key. Traded Rift rewards may expose a
-    -- different nested Uid/AssetUid, and sending that alias makes placement
-    -- silently reject an otherwise valid inventory egg.
-    local requestUid = key or recordUid or uid
+    local requestUid = recordUid or key or uid
     local candidates = riftPlacementCandidates(save)
     -- Some game revisions do not expose PetArea/CenterPoint through the plot
     -- adapter even though the official PlantEgg request still works. Keep the
@@ -6960,35 +6914,23 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
         if not placed and tostring(requestUid) ~= wanted then
             placed = requestRiftPlaceEgg(uid, localCFrame)
         end
-        if not placed and recordUid ~= nil and tostring(recordUid) ~= tostring(requestUid) then
-            placed = requestRiftPlaceEgg(recordUid, localCFrame)
-        end
         -- PlantEgg is the canonical client flow on the reference build. Try
         -- the exact UID before doing the slower equip retry; this also works
         -- when the live Tool has not replicated its UID attribute yet.
         if not placed and allowEquip == true and EggState and type(EggState.PlantEgg) == "function" then
-            pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
-            if not placed and tostring(requestUid) ~= wanted then
-                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
-            end
+            pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
         end
         -- Equip at most once per placement operation. Calling equipEggExact on
         -- every candidate multiplied its internal retries and was the reason
         -- a rejected placement held the anti/lease state for ~20 seconds.
         if not placed and allowEquip == true and not equipAttempted then
             equipAttempted = true
-            exactEquipped = equipEggExact(requestUid) == true
-            if not exactEquipped and tostring(requestUid) ~= wanted then
-                exactEquipped = equipEggExact(uid) == true
-            end
+            exactEquipped = equipEggExact(uid) == true
         end
         if not placed and exactEquipped then
-            placed = requestRiftPlaceEgg(requestUid, localCFrame)
-            if not placed and tostring(requestUid) ~= wanted then
-                placed = requestRiftPlaceEgg(uid, localCFrame)
-            end
+            placed = requestRiftPlaceEgg(uid, localCFrame)
             if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
+                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
             end
         end
 
@@ -7008,12 +6950,9 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
     -- local plot, so it cannot plant a different carried egg.
     if allowEquip == true and EggState and type(EggState.PlantEgg) == "function" then
         local offsets = { CFrame.new(), CFrame.new(2, 0, 0), CFrame.new(-2, 0, 0) }
-        if exactEquipped or (not equipAttempted and (equipEggExact(requestUid) or equipEggExact(uid))) then
+        if exactEquipped or (not equipAttempted and equipEggExact(uid)) then
             for _, offset in ipairs(offsets) do
-                local ok, result = pcall(EggState.PlantEgg, requestUid, offset)
-                if not (ok and result == true) and tostring(requestUid) ~= wanted then
-                    ok, result = pcall(EggState.PlantEgg, uid, offset)
-                end
+                local ok, result = pcall(EggState.PlantEgg, uid, offset)
                 if ok and result == true then
                     return true, "placed"
                 end
@@ -7030,7 +6969,7 @@ end
 function riftPlaceEggInPen(uid, label)
     local rift = eventState.rift
     local save = HUB.ReadRiftInventoryRealtime()
-    local key, egg, recordUid = getRiftEggInventoryEntry(save, uid)
+    local _, egg = getRiftEggInventoryEntry(save, uid)
     if type(egg) ~= "table" then return false, "egg is no longer in the bag" end
     if riftIsPlacedEgg(egg) then return true, "already placed" end
 
@@ -7067,38 +7006,23 @@ function riftPlaceEggInPen(uid, label)
             -- this before the optional equip fallback so a missing/late Tool
             -- visual cannot prevent an egg already present in EggInventory
             -- from being placed for the Rift quest.
-            -- Use the EggInventory key first; traded reward records can carry
-            -- a nested Uid that is not the key accepted by RequestPlaceEgg.
-            local requestUid = key or uid
-            local placed = requestRiftPlaceEgg(requestUid, localCFrame)
-            if not placed and tostring(requestUid) ~= tostring(uid) then
-                placed = requestRiftPlaceEgg(uid, localCFrame)
-            end
-            if not placed and recordUid ~= nil and tostring(recordUid) ~= tostring(requestUid) then
-                placed = requestRiftPlaceEgg(recordUid, localCFrame)
-            end
+            local placed = requestRiftPlaceEgg(uid, localCFrame)
             -- Keep the canonical PlantEgg path available before the optional
             -- equip retry; it can place an inventory UID even while the Tool
             -- replica is one frame behind.
             if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
+                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
             end
             -- One bounded equip attempt for the whole placement operation,
             -- never once per candidate slot.
             if not placed and not equipAttempted then
                 equipAttempted = true
-                exactEquipped = equipEggExact(requestUid) == true
-                if not exactEquipped and tostring(requestUid) ~= tostring(uid) then
-                    exactEquipped = equipEggExact(uid) == true
-                end
+                exactEquipped = equipEggExact(uid) == true
             end
             if not placed and exactEquipped then
-                placed = requestRiftPlaceEgg(requestUid, localCFrame)
-                if not placed and tostring(requestUid) ~= tostring(uid) then
-                    placed = requestRiftPlaceEgg(uid, localCFrame)
-                end
+                placed = requestRiftPlaceEgg(uid, localCFrame)
                 if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                    pcall(function() placed = EggState.PlantEgg(requestUid, localCFrame) == true end)
+                    pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
                 end
             end
             -- Placement is replicated asynchronously. Wait for the exact UID
@@ -7143,15 +7067,6 @@ HUB.RiftEggLooksLikeRiftEgg = function(egg)
     for _, value in ipairs(names) do
         if value ~= nil then joined[#joined + 1] = string.lower(tostring(value)) end
     end
-    -- Trade rewards are packed differently between builds; the Rift marker is
-    -- often nested under Data/AssetData/Metadata instead of the top-level egg
-    -- record. Reuse the bounded identity walker so an unplaced traded reward
-    -- is discoverable even when its display fields are nested.
-    local nestedValues = {}
-    riftCollectIdentityValues(egg, nestedValues, {}, 0)
-    for _, value in ipairs(nestedValues) do
-        joined[#joined + 1] = string.lower(tostring(value))
-    end
     local text = table.concat(joined, " ")
     return text:find("rift", 1, true) ~= nil and text:find("egg", 1, true) ~= nil
 end
@@ -7169,9 +7084,7 @@ HUB.RiftFindUnplacedRiftEgg = function(save, excluded)
             and not riftIsPlacedEgg(egg)
             and egg.Locked ~= true
             and HUB.RiftEggLooksLikeRiftEgg(egg) then
-            -- Pending placement is keyed by EggInventory, not by a nested
-            -- record UID that may be different after a trade.
-            return uid, egg
+            return itemUid, egg
         end
     end
     return nil
@@ -7296,11 +7209,8 @@ function queueNewRiftRewardEggs(beforeInventory, directRewardUids, maxWait)
             local itemKey = tostring(itemUid)
             if (direct[key] or direct[itemKey] or (not beforeInventory[key] and not beforeInventory[itemKey]))
                 and type(egg) == "table" and not riftIsPlacedEgg(egg)
-                and not rift.pending[key] and not rift.pending[itemKey] then
-                -- Keep the actual EggInventory key as the placement token.
-                -- itemKey remains useful for matching direct reward UIDs, but
-                -- RequestPlaceEgg must receive `key` on traded rewards.
-                rift.pending[key] = true
+                and not rift.pending[itemKey] then
+                rift.pending[itemKey] = true
                 queued += 1
                 lastQueuedAt = os.clock()
             end
@@ -7906,28 +7816,9 @@ function bossArenaTarget(arena)
             return nil
         end)
         if ok and pos then
-            -- Match Suji: an elevated hand is a waiting state, not a movement
-            -- target. The old Axel path grounded every hand position and then
-            -- retweened whenever the animation moved, which made the player
-            -- chase the arm around the arena.
-            local root = findHRP()
-            if root and pos.Y - root.Position.Y >= 14 then
-                return nil, "boss hand up — waiting", true, hand
-            end
-            if root then
-                local away = Vector3.new(
-                    root.Position.X - pos.X,
-                    0,
-                    root.Position.Z - pos.Z
-                )
-                local unit = away.Magnitude > 1 and away.Unit or Vector3.new(1, 0, 0)
-                local sujiTarget = Vector3.new(
-                    pos.X + unit.X * 5,
-                    root.Position.Y,
-                    pos.Z + unit.Z * 5
-                )
-                return sujiTarget, "boss hand", true, hand
-            end
+            -- Never reject the exact hand because its animated Y is above the
+            -- HumanoidRootPart. riftBossApproachPosition deliberately keeps
+            -- movement on the arena floor while preserving this hand's X/Z.
             return pos, "boss hand", true, hand
         end
         return nil, "Boss.UpperHand1.R spawned; waiting for its position"
@@ -7947,12 +7838,9 @@ function riftBossApproachPosition(target, label, root)
     if typeof(target) ~= "Vector3" or not root then return nil end
     local flat = Vector3.new(root.Position.X - target.X, 0, root.Position.Z - target.Z)
     if flat.Magnitude < 0.1 then flat = Vector3.new(0, 0, 1) end
-    -- The hand target already contains Suji's 5-stud clearance. Do not add a
-    -- second offset or the player will stop too far away from the hand.
-    local clearance = label == "boss hand" and 0 or 9
-    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * clearance
-    -- Stop short of a crystal hitbox. The bat already has range; exact
-    -- positioning causes needless corrections and can move through the tower.
+    local approach = Vector3.new(target.X, target.Y, target.Z) + flat.Unit * 9
+    -- Stop short of the hitbox. The bat already has range; exact positioning
+    -- causes needless corrections and can move the avatar through the tower.
     return Vector3.new(approach.X, root.Position.Y, approach.Z)
 end
 
@@ -7977,7 +7865,7 @@ function stageRiftBossAtSafeCenter(cancelled)
         -- Boss entry must use the same native tween as the combat leg.  The
         -- generic StealGlide route writes CFrame on every heartbeat and can
         -- look like a repeated TP when the arena is streaming.
-        return HUB.TweenRiftBossTo(center, math.min(glideSpeed, 600), cancelled)
+        return HUB.TweenRiftBossTo(center, math.min(glideSpeed, 150), cancelled)
     end)
     HUB.StealGlide.owner = previousOwner
     if not ok or moved ~= true then return false end
@@ -8084,45 +7972,28 @@ HUB.IsBossArenaDefeated = function(snapshot, arena)
         or LP:GetAttribute("InBossArena") ~= true then
         return false
     end
-    -- Read the exact hand first so a positive sample can arm the round proof.
-    -- Suji also requires the live BossEvent snapshot to report zero before
-    -- treating the hand's local UI value as a completed kill.
+    -- Prefer the exact Boss.UpperHand1.R path. Generic BossHealth and
+    -- HealthShifted snapshots are deliberately ignored here: they can be 0
+    -- while the hand is still spawning and were the source of premature exits.
     local handHealth = HUB.GetBossHandHealth(arena)
-    local snapshotHealth = tonumber(snapshot.BossHealth)
-    if snapshotHealth == nil or snapshotHealth > 0 then
-        -- Do not carry a local/UI zero forward while the server still reports
-        -- live boss HP; Suji waits for the server snapshot to reach zero too.
-        boss.armHealthZeroSeen = false
-        boss.armHealthZeroCandidateAt = 0
-        return false
-    end
     -- The hand can be destroyed/reparented on the same replication step that
     -- publishes HP=0.  Once this round has already observed the exact
     -- positive -> exact zero transition, allow a very short hand-disappearance
     -- window so the leave worker can run.  Missing R before that proof is
     -- never treated as zero.
     if handHealth == nil then
-        if boss.armHealthPositiveSeen ~= true then
+        local zeroAge = os.clock() - (tonumber(boss.lastHealthAt) or 0)
+        if boss.armHealthPositiveSeen ~= true
+            or boss.armHealthZeroSeen ~= true
+            or tostring(boss.armHealthSource or "") ~= "Boss.UpperHand1.R"
+            or tonumber(boss.armHealth) ~= 0
+            or zeroAge > 1.5 then
             return false
         end
-        local candidateAt = tonumber(boss.armHealthZeroCandidateAt) or 0
-        if candidateAt <= 0 then
-            boss.armHealthZeroCandidateAt = os.clock()
-            return false
-        end
-        if os.clock() - candidateAt < 2 then return false end
-        boss.armHealth = 0
-        boss.armHealthSource = "Boss.UpperHand1.R"
-        boss.armHealthZeroSeen = true
         return true
     end
     HUB.RecordRiftBossHealth(handHealth, "Boss.UpperHand1.R")
     if handHealth ~= 0 then return false end
-    local candidateAt = tonumber(boss.armHealthZeroCandidateAt) or 0
-    if candidateAt <= 0 or os.clock() - candidateAt < 2 then
-        return false
-    end
-    boss.armHealthZeroSeen = true
     return boss.armHealthPositiveSeen == true and boss.armHealthZeroSeen == true
 end
 
@@ -8306,10 +8177,8 @@ HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
         local speedOk, effective = pcall(HUB.StealGlide.EffectiveSpeed, travelSpeed)
         if speedOk and tonumber(effective) then travelSpeed = effective end
     end
-    -- Suji's boss route uses its own effective movement speed (120-600).
-    -- The old 150 cap made a normal arena leg look like a 5-second delay.
-    travelSpeed = math.clamp(travelSpeed, 120, 600)
-    local duration = math.clamp(distance / travelSpeed, 0.08, 4)
+    travelSpeed = math.clamp(travelSpeed, 50, 150)
+    local duration = math.clamp(distance / travelSpeed, 0.25, 8)
     local tweenService = game:GetService("TweenService")
     local tweenOk, tween = pcall(function()
         return tweenService:Create(
@@ -8365,7 +8234,7 @@ HUB.TweenRiftBossTo = function(target, speed, shouldCancel, onStep)
     -- was pulled back; the caller will retry from the corrected position and
     -- can then transition to the exact Boss.UpperHand1.R target normally.
     if completed then
-        task.wait(0.03)
+        task.wait(0.08)
         local settledRoot = findHRP()
         if not settledRoot then
             completed = false
@@ -8576,7 +8445,7 @@ function leaveRiftBoss()
                     -- the live Beam from inside the tween.
                     return HUB.TweenRiftBossTo(
                         leaveTarget + Vector3.new(0, 2, 0),
-                        math.min(glideSpeed, 600),
+                        math.min(glideSpeed, 150),
                         function()
                             return LP:GetAttribute("InBossArena") ~= true or HUB.dead
                         end,
@@ -8613,7 +8482,7 @@ function leaveRiftBoss()
             pcall(function() swingBossBat(leaveTarget) end)
         end
         if LP:GetAttribute("InBossArena") ~= true then break end
-        task.wait(0.05)
+        task.wait(0.1)
     end
 
     HUB.StealGlide.owner = previousOwner
@@ -8629,7 +8498,7 @@ function leaveRiftBoss()
                 left = false
                 break
             end
-            task.wait(0.03)
+            task.wait(0.05)
         end
         if HUB.dead then left = false end
     end
@@ -8858,8 +8727,8 @@ function completeRiftBossRun(boss, windowKey, allowActions, inArena)
                 boss.status = "resuming"
                 boss.detail = "Arena exit complete; boss HP is zero; staying in this server"
             end
-            if boss.hopQueued and type(HUB.ScheduleRiftBossHop) == "function" then
-                HUB.ScheduleRiftBossHop()
+            if boss.hopQueued and type(HUB.TriggerRiftBossHop) == "function" then
+                HUB.TriggerRiftBossHop()
             end
         else
             boss.leaveCompleted = false
@@ -8885,8 +8754,8 @@ function completeRiftBossRun(boss, windowKey, allowActions, inArena)
             boss.hopAfterLeaveAt = 0
             boss.status, boss.detail = "resuming", "Boss clear confirmed; staying in this server"
         end
-        if boss.hopQueued and not inArena and type(HUB.ScheduleRiftBossHop) == "function" then
-            HUB.ScheduleRiftBossHop()
+        if boss.hopQueued and not inArena and type(HUB.TriggerRiftBossHop) == "function" then
+            HUB.TriggerRiftBossHop()
         end
     end
     publishEvent("The Rift Boss", boss.detail, boss.status)
@@ -9016,7 +8885,6 @@ function bossCycle(allowActions, expectedEpoch)
             boss.armHealthPositiveSeen = false
             boss.armHealthZeroSeen = false
             boss.armHealthZeroCandidateRevision = -1
-            boss.armHealthZeroCandidateAt = 0
             boss.armInstance = nil
             boss.lastHealthAt = 0
             boss.liveSnapshot = nil
@@ -9042,13 +8910,13 @@ function bossCycle(allowActions, expectedEpoch)
         if boss.sessionDefeated == true then boss.roundClosedObserved = true end
         boss.status, boss.detail = "waiting", "Rift arena window is closed"
         publishEvent("The Rift Boss", boss.detail, boss.status)
-        if boss.hopQueued then HUB.ScheduleRiftBossHop() end
+        if boss.hopQueued then HUB.TriggerRiftBossHop() end
         return false
     end
     if boss.sessionDefeated == true and not inArena then
         boss.status, boss.detail = "resuming", "Boss cleared; staying in this server"
         publishEvent("The Rift Boss", boss.detail, boss.status)
-        if boss.hopQueued then HUB.ScheduleRiftBossHop() end
+        if boss.hopQueued then HUB.TriggerRiftBossHop() end
         return true
     end
     if not inArena and open then
@@ -9058,7 +8926,7 @@ function bossCycle(allowActions, expectedEpoch)
                 and "Boss cleared; waiting for the configured Rift Boss hop delay"
                 or "Boss cleared; staying in this server"
             publishEvent("The Rift Boss", boss.detail, boss.status)
-            if boss.hopQueued then HUB.ScheduleRiftBossHop() end
+            if boss.hopQueued then HUB.TriggerRiftBossHop() end
             return true
         end
         if allowActions and not isPlayerCarryingEgg() and not cancelled() then
@@ -9084,7 +8952,7 @@ function bossCycle(allowActions, expectedEpoch)
                 if not atPortal then
                     atPortal = HUB.TweenRiftBossTo(
                         portalPos + Vector3.new(0, 3, 0),
-                        math.min(glideSpeed, 600),
+                        math.min(glideSpeed, 150),
                         cancelled
                     ) == true
                 end
@@ -9131,53 +8999,16 @@ function bossCycle(allowActions, expectedEpoch)
         end
     end
 
-    -- Capture one movement leg.  Keep this patch scoped to boss movement: the
-    -- live hand target is refreshed here, while all other hub features keep
-    -- using their original controllers.
+    -- Capture one movement leg.  `Boss.UpperHand1.R` is an HP authority,
+    -- not a live path/position stream.  Once the hand leg is captured, do not
+    -- ask for its position again; the next realtime snapshot is only for HP.
+    -- Crystal targets are also held until the beam selects a different target.
     local combatLeg = boss.combatLeg
     local target, label
     if type(combatLeg) == "table"
         and combatLeg.phase == "boss"
         and typeof(combatLeg.position) == "Vector3" then
-        local _, liveLabel, _, liveRef = bossArenaTarget(arena)
-        if liveLabel == "boss hand up — waiting" then
-            -- Suji does not chase the raised arm. Drop the completed/active
-            -- hand leg and wait for the next low-hand snapshot to create one
-            -- fresh tween destination.
-            pcall(function() HUB.CancelRiftBossTween() end)
-            boss.combatLeg = nil
-            combatLeg = nil
-            label = liveLabel
-        elseif liveLabel == "boss hand"
-            and (liveRef == nil or combatLeg.ref == nil or liveRef == combatLeg.ref) then
-            -- Freeze the destination for this leg. The hand's animation may
-            -- move the Bone after capture, but it must never cancel and retween
-            -- the player's movement on every animation step.
-            target, label = combatLeg.position, combatLeg.label
-        elseif liveLabel == "boss hand" and liveRef ~= combatLeg.ref then
-            -- A genuinely recreated hand instance is a phase/stream change,
-            -- not an animation update. Rebind on the next controller pass.
-            pcall(function() HUB.CancelRiftBossTween() end)
-            boss.combatLeg = nil
-            combatLeg = nil
-        elseif liveRef ~= nil then
-            -- A live crystal target means the arena phase changed back from
-            -- the hand. Never keep using the old hand leg in that case.
-            pcall(function() HUB.CancelRiftBossTween() end)
-            boss.combatLeg = nil
-            combatLeg = nil
-        else
-            -- Keep a valid captured leg through a short streaming gap. If the
-            -- exact hand instance was actually removed, clear it so the next
-            -- live low-hand read can create a new leg.
-            if combatLeg.ref and combatLeg.ref.Parent then
-                target, label = combatLeg.position, combatLeg.label
-            else
-                pcall(function() HUB.CancelRiftBossTween() end)
-                boss.combatLeg = nil
-                combatLeg = nil
-            end
-        end
+        target, label = combatLeg.position, combatLeg.label
     else
         local candidate, candidateLabel, _, candidateRef = bossArenaTarget(arena)
         if type(combatLeg) == "table" and combatLeg.phase == "crystal" then
@@ -9191,37 +9022,11 @@ function bossCycle(allowActions, expectedEpoch)
                 boss.combatLeg = nil
                 target, label = candidate, candidateLabel
             else
-                -- Allow a short streaming grace period, then clear a dead
-                -- Crystal leg. This prevents the character from standing at
-                -- the old tower while the hand target is being replicated.
-                local ref = combatLeg.ref
-                local refDead = not ref or not ref.Parent
-                if ref and ref.Parent then
-                    pcall(function()
-                        refDead = refDead
-                            or ref:GetAttribute("Destroyed") == true
-                            or ref:GetAttribute("IsDestroyed") == true
-                            or ref:GetAttribute("Dead") == true
-                        for _, key in ipairs({ "Health", "HP", "CurrentHealth", "HitPoints" }) do
-                            local value = tonumber(ref:GetAttribute(key))
-                            if value ~= nil and value <= 0 then refDead = true break end
-                        end
-                    end)
-                end
-                if refDead then
-                    pcall(function() HUB.CancelRiftBossTween() end)
-                    boss.combatLeg = nil
-                    combatLeg = nil
-                else
-                    combatLeg.missingSince = combatLeg.missingSince or os.clock()
-                    if os.clock() - combatLeg.missingSince >= 0.75 then
-                        pcall(function() HUB.CancelRiftBossTween() end)
-                        boss.combatLeg = nil
-                        combatLeg = nil
-                    else
-                        target, label = combatLeg.position, combatLeg.label
-                    end
-                end
+                -- A missing Beam/replica is a transient wait state. Keep the
+                -- frozen Crystal leg instead of clearing it and falling back
+                -- to safe position; the next live pass can still discover the
+                -- same tower or the exact hand phase.
+                target, label = combatLeg.position, combatLeg.label
             end
         else
             target, label = candidate, candidateLabel
@@ -9243,12 +9048,6 @@ function bossCycle(allowActions, expectedEpoch)
                 boss.combatLeg = combatLeg
             end
         end
-    end
-    if not target then
-        boss.status = "fighting"
-        boss.detail = label or "Waiting for the live Crystal Tower or Boss.UpperHand1.R target"
-        publishEvent("The Rift Boss", boss.detail, boss.status)
-        return true
     end
     if target and allowActions and not cancelled() then
         ReleaseTreadmillForAction()
@@ -9282,7 +9081,7 @@ function bossCycle(allowActions, expectedEpoch)
                 local moveCallOk, moveResult = pcall(
                     HUB.TweenRiftBossTo,
                     approach,
-                    math.min(glideSpeed, 600),
+                    math.min(glideSpeed, 150),
                     cancelled,
                     nil
                 )
@@ -9398,15 +9197,12 @@ function HUB.TriggerRiftBossHop()
     local state = HUB.ServerHopState
     local boss = eventState and eventState.boss
     if not boss or boss.hopExplicit ~= true or boss.hopEnabled ~= true
-        or boss.hopBusy == true then
+        or boss.hopBusy == true or not isBossHopReady(state) then
         if type(HUB.ClearRiftBossHopState) == "function" then
             HUB.ClearRiftBossHopState()
         end
         return false
     end
-    -- Not ready can simply mean the post-defeat delay is still running.
-    -- Preserve the queue so the scheduler can retry instead of clearing it.
-    if not isBossHopReady(state) then return false end
     boss.hopBusy = true
     task.spawn(function()
         if HUB.dead or not boss.enabled or not isBossHopReady(state) then
@@ -9418,30 +9214,6 @@ function HUB.TriggerRiftBossHop()
             boss.hopBusy = false
             boss.hopAfterLeaveAt = os.clock() + 5
         end
-    end)
-    return true
-end
-
-function HUB.ScheduleRiftBossHop()
-    local state = HUB.ServerHopState
-    local boss = eventState and eventState.boss
-    if not boss or boss.hopQueued ~= true or boss.hopScheduleBusy == true then
-        return false
-    end
-    boss.hopScheduleBusy = true
-    local epoch = tonumber(boss.controllerEpoch) or 0
-    task.spawn(function()
-        while not HUB.dead
-            and boss.enabled == true
-            and boss.hopQueued == true
-            and boss.hopBusy ~= true
-            and (tonumber(boss.controllerEpoch) or 0) == epoch do
-            if isBossHopReady(state) and HUB.TriggerRiftBossHop() then
-                break
-            end
-            task.wait(0.25)
-        end
-        boss.hopScheduleBusy = false
     end)
     return true
 end
@@ -9502,14 +9274,7 @@ task.spawn(function()
         end
         if eventState.boss.shop then pcall(runBossShop) end
         if eventState.boss.claim then pcall(claimBossMilestones) end
-        -- Keep maintenance responsive while Rift/Boss is enabled.  The old
-        -- four-second sleep was visible as a delayed boss status/target check;
-        -- shop/claim-only sessions can keep the slower maintenance cadence.
-        local maintenanceInterval = (eventState.boss.enabled
-            or eventState.rift.enabled
-            or eventState.boss.shop
-            or eventState.boss.claim) and 0.5 or 4
-        task.wait(maintenanceInterval)
+        task.wait(4)
     end
 end)
 
@@ -10043,7 +9808,7 @@ if not HUB.FieldEggScanLoopStarted then
             -- signal are visible without rerunning the script. The reader's
             -- short cache prevents duplicate remote calls from each worker.
             pcall(HUB.ReadSujiFieldEggSnapshot)
-            task.wait(0.12)
+            task.wait(0.2)
         end
         HUB.FieldEggScanLoopStarted = false
     end)
@@ -10475,7 +10240,7 @@ HUB.ReleaseAutoStealForFallback = function()
         -- priority worker forever; a live route gets a short grace period.
         local route = HUB.SujiRouteState
         local routeAge = route and (os.clock() - (tonumber(route.startedAt) or os.clock())) or math.huge
-        if route and routeAge < 3 then return false end
+        if route and routeAge < 8 then return false end
         carryingEggReturnActive = false
     end
     HUB.AutoStealMovementActive = false
@@ -11693,9 +11458,6 @@ HUB.SujiStealEgg = function(targetItem)
     local routeState = {
         record = record,
         startedAt = os.clock(),
-        lastProgressAt = os.clock(),
-        lastRootPosition = nil,
-        phase = "starting",
         autoRoute = autoRoute,
         riftRoute = riftRoute,
         controllerEpoch = HUB.AutoStealControllerEpoch,
@@ -11751,7 +11513,6 @@ HUB.SujiStealEgg = function(targetItem)
     end
 
     HUB.AutoStealMovementActive = true
-    routeState.phase = "staging"
     if riftRoute then
         HUB.StartRiftNoClip()
     else
@@ -11814,7 +11575,6 @@ HUB.SujiStealEgg = function(targetItem)
     task.spawn(HUB.SujiCarryPump, routeState)
 
     local moved = false
-    routeState.phase = "outbound"
     for attempt = 1, 3 do
         -- Refresh the same UID before each retry.  The field stream can move
         -- an egg's Position/AreaId after the first scan; Suji follows the
@@ -11917,7 +11677,6 @@ HUB.SujiStealEgg = function(targetItem)
     -- first carry gate; then wait for the live Tool when the build exposes one,
     -- let the guard consume exactly one hit, wait for Humanoid recovery, and
     -- re-carry the same UID before any return movement is allowed.
-    routeState.phase = "carry"
     local carryAcknowledged = routeState.carryDone == true
     local carried = HUB.IsSelectedCarriedEgg(record)
     if not carried and carryAcknowledged then
@@ -11988,7 +11747,6 @@ HUB.SujiStealEgg = function(targetItem)
 
     carryingEggReturnActive = true
     HUB.AutoStealMovementActive = true
-    routeState.phase = "return"
     if _G.AxelWebLog and _G.AxelWebLog.SetActivity then
         pcall(_G.AxelWebLog.SetActivity, "Returning to Base", "Suji route: carrying the selected egg")
     end
@@ -12286,7 +12044,7 @@ HUB.WaitForTreadmillSpeedRise = function(before, timeout)
         if HUB.IsDoubleSpeedVisible() then return true end
         local after = HUB.ReadTreadmillSpeedState()
         if HUB.TreadmillSpeedRose(before, after) then return true end
-        task.wait(0.06)
+        task.wait(0.12)
     end
     return false
 end
@@ -12510,7 +12268,7 @@ HUB.RunAutoTreadmillTraining = function(controllerEpoch)
         HUB.TreadmillMounted = armed == true
         local speedConfirmed = false
         if armed then
-            speedConfirmed = HUB.WaitForTreadmillSpeedRise(baseline, 0.30) == true
+            speedConfirmed = HUB.WaitForTreadmillSpeedRise(baseline, 0.45) == true
         end
         if armed then
             treadmillTrainingActive = true
@@ -12642,17 +12400,8 @@ function HandleAutoTreadmillHandoff()
     if autoStealEnabled ~= true and not carryingEggReturnActive then
         HUB.ReconcileAutoStealForTreadmill()
     end
-    if HUB.Orchestrator then
-        -- Auto Steal is a desired toggle, not a permanent movement owner. If
-        -- its exact route/carry has cleared, release the one-trip owner in
-        -- this same pass so Treadmill can resume immediately.
-        if HUB.Orchestrator.owner == "steal"
-            and not carryingEggReturnActive
-            and not isPlayerCarryingEgg()
-            and not HUB.SujiRouteState then
-            HUB.Orchestrator.End("steal")
-        end
-        if not HUB.Orchestrator.Allows("treadmill") then return false end
+    if HUB.Orchestrator and not HUB.Orchestrator.Allows("treadmill") then
+        return false
     end
     if IsRiftBossPriorityActive() then
         if treadmillTrainingActive or HUB.IsDoubleSpeedVisible() then
@@ -12699,7 +12448,7 @@ function QueueAutoTreadmillResume()
     resume.token = (tonumber(resume.token) or 0) + 1
     local token = resume.token
     task.spawn(function()
-        task.wait(0.08)
+        task.wait(0.2)
         if HUB.dead or token ~= resume.token or not autoTreadmillEnabled then return end
         if autoStealEnabled ~= true and not carryingEggReturnActive then
             pcall(HUB.ReconcileAutoStealForTreadmill)
@@ -12709,8 +12458,7 @@ function QueueAutoTreadmillResume()
         -- movement remains higher priority and is intentionally respected.
         if HUB.Orchestrator then
             local owner = HUB.Orchestrator.owner
-            if owner == "steal" and not carryingEggReturnActive and not HUB.SujiRouteState
-                and not isPlayerCarryingEgg() then
+            if owner == "steal" and not autoStealEnabled and not carryingEggReturnActive and not HUB.SujiRouteState then
                 HUB.Orchestrator.End("steal")
             elseif owner == "rift"
                 and type(HUB.IsRiftMovementActive) == "function"
@@ -13546,7 +13294,6 @@ HUB.ResetTransientAutomationState = function(reason)
             eventState.boss.armHealthPositiveSeen = false
             eventState.boss.armHealthZeroSeen = false
             eventState.boss.armHealthZeroCandidateRevision = -1
-            eventState.boss.armHealthZeroCandidateAt = 0
             eventState.boss.armInstance = nil
             eventState.boss.lastHealthAt = 0
             eventState.boss.liveSnapshot = nil
@@ -14093,7 +13840,7 @@ task.spawn(function()
                 local bossState = eventState.boss
                 local bossNow = os.clock()
                 local bossPriorityActive = IsRiftBossPriorityActive()
-                local bossPollInterval = LP:GetAttribute("InBossArena") == true and 0.10 or 0.20
+                local bossPollInterval = LP:GetAttribute("InBossArena") == true and 0.16 or 0.35
                 local bossPollDue = bossState.enabled == true
                     and bossState.sessionDefeated ~= true
                     and bossNow - (tonumber(bossState.controllerPollAt) or 0) >= bossPollInterval
@@ -14151,7 +13898,7 @@ task.spawn(function()
                     and not eventState.rift.acquiring
                     and not eventState.rift.placing
                     and HUB.SujiRouteState == nil
-                    and os.clock() - (eventState.rift.previewAt or 0) >= 0.20 then
+                    and os.clock() - (eventState.rift.previewAt or 0) >= 0.45 then
                     eventState.rift.previewAt = os.clock()
                     pcall(riftCycle, false)
                 end
@@ -14230,7 +13977,7 @@ task.spawn(function()
                 if not actionTaken and eventState.rift.enabled
                     and HUB.Orchestrator.Allows("rift")
                     and HUB.SujiRouteState == nil
-                    and os.clock() - (eventState.rift.lastActionAt or 0) >= 0.20 then
+                    and os.clock() - (eventState.rift.lastActionAt or 0) >= 0.45 then
                     HUB.Orchestrator.Begin("rift")
                     eventState.rift.lastActionAt = os.clock()
                     local riftOk, riftDidWork = pcall(riftCycle, true)
@@ -14328,19 +14075,7 @@ task.spawn(function()
         -- Keep the controller responsive to a map refresh or a toggle change.
         -- The old sleep used the user steal gap (up to 10s), which made a
         -- perfectly valid re-enable look dead until the script was rerun.
-        local bossStatus = tostring(eventState.boss.status or "")
-        local bossMovementLive = eventState.boss.enabled == true
-            and (LP:GetAttribute("InBossArena") == true
-                or bossStatus == "starting"
-                or bossStatus == "joining"
-                or bossStatus == "fighting"
-                or bossStatus == "leaving")
-        local fastAutomationLive = autoStealEnabled == true
-            or autoTreadmillEnabled == true
-            or eventState.rift.enabled == true
-        local interval = bossMovementLive and 0.10
-            or (fastAutomationLive and 0.12
-                or math.min(0.25, tonumber(stealDelay) or 0.25))
+        local interval = autoTreadmillEnabled and 0.25 or math.min(0.25, tonumber(stealDelay) or 0.25)
         if HUB.AutomationWakeEpoch ~= wakeEpoch then interval = 0.05 end
         task.wait(interval)
     end
@@ -15995,7 +15730,6 @@ EventsSub:AddToggle({
         boss.armHealthPositiveSeen = false
         boss.armHealthZeroSeen = false
         boss.armHealthZeroCandidateRevision = -1
-        boss.armHealthZeroCandidateAt = 0
         boss.armInstance = nil
         boss.roundClosedObserved = false
         boss.arenaInstance = nil
@@ -16069,8 +15803,8 @@ EventsSub:AddToggle({
             and LP:GetAttribute("InBossArena") ~= true then
             boss.hopQueued = true
             boss.hopAfterLeaveAt = boss.hopAfterLeaveAt > 0 and boss.hopAfterLeaveAt or os.clock()
-            if type(HUB.ScheduleRiftBossHop) == "function" then
-                HUB.ScheduleRiftBossHop()
+            if type(HUB.TriggerRiftBossHop) == "function" then
+                HUB.TriggerRiftBossHop()
             end
         end
     end)
