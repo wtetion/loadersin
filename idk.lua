@@ -1240,7 +1240,7 @@ do
         local key = string.lower(text):gsub('[%s_%-]+', '')
         local aliases = {
             titan='Titan', divine='Divine', transcendent='Transcendent', superior='Superior',
-            eternal='Eternal', ethereal='Eternal', etheral='Eternal', limited='Limited', secret='Secret', exotic='Exotic', cosmic='Cosmic',
+            eternal='Eternal', ethernal='Eternal', ethereal='Eternal', etheral='Eternal', limited='Limited', secret='Secret', exotic='Exotic', cosmic='Cosmic',
             exclusive='Exclusive', admin='Admin', mythic='Mythic', mythical='Mythical', prismatic='Prismatic',
             rainbow='Rainbow', ['squishygod']='Squishy God', brainrotgod='BrainrotGod', legendary='Legendary',
             epic='Epic', rare='Rare', superrare='SuperRare', celestial='Celestial', uncommon='Uncommon',
@@ -2589,6 +2589,8 @@ function GetEggTravelSpeedSample()
         playerSpeed = nil,
         characterSpeed = nil,
         saveSpeed = nil,
+        speedStat = nil,
+        webSpeed = nil,
     }
     local hum = findHum()
     if hum then sample.walkSpeed = tonumber(hum.WalkSpeed) end
@@ -2606,6 +2608,32 @@ function GetEggTravelSpeedSample()
     sample.playerSpeed = readAttr(LP, {"Speed", "CurrentSpeed", "SpeedValue"})
     sample.characterSpeed = readAttr(LP.Character, {"Speed", "CurrentSpeed", "SpeedValue"})
 
+    -- Some revisions expose the live stat as a NumberValue/IntValue instead
+    -- of an Attribute.  Read the player, character, Humanoid and leaderstats
+    -- replicas so a speed increase during the outbound egg leg cannot pass
+    -- without the recovery jump.
+    local speedNames = {"Speed", "CurrentSpeed", "SpeedPower", "SpeedValue"}
+    local function readValueObject(root)
+        if not root then return nil end
+        local value = readAttr(root, speedNames)
+        if value ~= nil then return value end
+        for _, name in ipairs(speedNames) do
+            local child = root:FindFirstChild(name)
+            if child and (child:IsA("NumberValue") or child:IsA("IntValue")) then
+                local ok, result = pcall(function() return tonumber(child.Value) end)
+                if ok and result ~= nil then return result end
+            end
+        end
+        return nil
+    end
+    sample.speedStat = readValueObject(LP)
+        or readValueObject(LP.Character)
+        or readValueObject(hum)
+    if sample.speedStat == nil then
+        local leaderstats = LP:FindFirstChild("leaderstats")
+        sample.speedStat = readValueObject(leaderstats)
+    end
+
     -- SaveModule is used only as a fallback for builds that expose the speed
     -- stat in saved data instead of an attribute or Humanoid property.
     if type(GetCurrentSave) == "function" then
@@ -2618,7 +2646,35 @@ function GetEggTravelSpeedSample()
                     break
                 end
             end
+            if sample.speedStat == nil then
+                local wanted = {
+                    speed = true, currentspeed = true, speedpower = true, speedvalue = true,
+                }
+                local function findNestedSpeed(root, depth, seen)
+                    if type(root) ~= "table" or (depth or 0) > 6 then return nil end
+                    seen = seen or {}
+                    if seen[root] then return nil end
+                    seen[root] = true
+                    for key, value in pairs(root) do
+                        local normalized = string.lower(tostring(key)):gsub("[^%w]", "")
+                        if wanted[normalized] and type(value) ~= "table" then
+                            local numeric = tonumber(value)
+                            if numeric ~= nil then return numeric end
+                        end
+                        if type(value) == "table" then
+                            local nested = findNestedSpeed(value, (depth or 0) + 1, seen)
+                            if nested ~= nil then return nested end
+                        end
+                    end
+                    return nil
+                end
+                sample.speedStat = findNestedSpeed(save, 0, nil)
+            end
         end
+    end
+    local webState = HUB.WebLogSpeedState
+    if type(webState) == "table" then
+        sample.webSpeed = tonumber(webState.current or webState.last)
     end
     return sample
 end
@@ -2786,6 +2842,8 @@ function CheckEggTravelSpeedRise()
         playerSpeed = 0.5,
         characterSpeed = 0.5,
         saveSpeed = 0.1,
+        speedStat = 0.1,
+        webSpeed = 0.1,
     }
     for key, threshold in pairs(thresholds) do
         local before = tonumber(baseline[key])
@@ -3758,6 +3816,21 @@ HUB.StealTeleport.To = function(target, shouldCancel, yOffset)
     end)
     cleanup()
 
+    -- In Teleport mode the speed watcher fires inside the protected PivotTo
+    -- block.  cleanup() normally restores Running, which cancels the jump
+    -- before the physics step can consume Humanoid.Jump.  Re-issue the jump
+    -- after cleanup, then MoveEggTeleportGuarded waits for the landing before
+    -- retrying the same egg target.
+    if speedGuardTripped then
+        local jumpHumanoid = findHum()
+        if jumpHumanoid then
+            pcall(function()
+                jumpHumanoid.Jump = true
+                jumpHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            end)
+        end
+    end
+
     if not ok or speedGuardTripped or not finished or shouldCancel and shouldCancel() then return false end
     local finalRoot = findHRP()
     if not finalRoot then return false end
@@ -4686,7 +4759,7 @@ function HUB.NormalizeStealFilterSelection(selection, options)
         end
         if options == RARITY_NAMES then
             local compactAlias = {
-                etheral = "eternal", ethereal = "eternal", eternal = "eternal",
+                etheral = "eternal", ethernal = "eternal", ethereal = "eternal", eternal = "eternal",
                 mythic = "mythical",
             }
             local canonicalKey = compactAlias[key]
@@ -6691,6 +6764,37 @@ function riftGetPenParts()
         if typeof(petArea) ~= "Instance" or not petArea:IsA("BasePart") then petArea = nil end
         if typeof(center) ~= "Instance" or not center:IsA("BasePart") then center = nil end
     end
+    -- Match Suji's final plot resolver.  PlotState can briefly return nil or
+    -- an old slot during the reward hand-off, while PlotSign already points
+    -- at the current player.  Without this fallback the reward UID is queued
+    -- correctly but RequestPlaceEgg never gets a valid pen slot.
+    if not petArea or not center then
+        local plots = Workspace:FindFirstChild("Plots")
+        local playerName = tostring(LP.Name or "")
+        local displayName = tostring(LP.DisplayName or "")
+        if plots then
+            for _, plot in ipairs(plots:GetChildren()) do
+                local sign = plot:FindFirstChild("PlotSign")
+                local signText
+                if sign then
+                    for _, descendant in ipairs(sign:GetDescendants()) do
+                        if descendant:IsA("TextLabel") and descendant.Text and descendant.Text ~= "" then
+                            signText = descendant.Text
+                            break
+                        end
+                    end
+                end
+                if signText and ((displayName ~= "" and signText:find(displayName, 1, true))
+                    or (playerName ~= "" and signText:find(playerName, 1, true))) then
+                    petArea = petArea or plot:FindFirstChild("PetArea", true)
+                    center = center or plot:FindFirstChild("CenterPoint", true)
+                    break
+                end
+            end
+        end
+        if typeof(petArea) ~= "Instance" or not petArea:IsA("BasePart") then petArea = nil end
+        if typeof(center) ~= "Instance" or not center:IsA("BasePart") then center = nil end
+    end
     return petArea, center
 end
 
@@ -6894,7 +6998,8 @@ HUB.SujiPlaceEggInPen = function(uid, allowEquip)
     if type(egg) == "table" and riftIsPlacedEgg(egg) then return true, "skip" end
 
     local root = findHRP()
-    local center = GetLocalPlotCenter()
+    local _, penCenter = riftGetPenParts()
+    local center = penCenter and penCenter.Position or GetLocalPlotCenter()
     if not root or typeof(center) ~= "Vector3" then return false, "far" end
     local distance = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z).Magnitude
     if distance > 35 then return false, "far" end
@@ -6982,7 +7087,8 @@ function riftPlaceEggInPen(uid, label)
     if type(egg) ~= "table" then return false, "egg is no longer in the bag" end
     if riftIsPlacedEgg(egg) then return true, "already placed" end
 
-    local plotCenter = GetLocalPlotCenter()
+    local _, penCenter = riftGetPenParts()
+    local plotCenter = penCenter and penCenter.Position or GetLocalPlotCenter()
     local hrp = findHRP()
     if not hrp or not plotCenter then return false, "base pen is not ready" end
 
@@ -6999,57 +7105,27 @@ function riftPlaceEggInPen(uid, label)
             if not HUB.ReturnViaSafeCenter(plotCenter, math.min(glideSpeed, 300), nil) then
                 return false, "walking to the pen"
             end
-            task.wait(0.10)
+            -- Suji gives the character/plot replica a short settle window
+            -- before sending RequestPlaceEgg.  Sending immediately after the
+            -- safe-center leg is the intermittent post-trade failure: the
+            -- reward UID exists, but the pen resolver still belongs to the
+            -- previous plot frame.
+            task.wait(0.40)
         end
 
-    local placementSlots = riftPlacementCandidates(save)
-    -- Some builds do not expose PetArea/CenterPoint until the first placement
-    -- request. Keep the exact UID flow but still send one neutral slot, matching
-    -- the canonical Suji placement fallback.
-    if #placementSlots == 0 then placementSlots = { CFrame.new() } end
-    local equipAttempted = false
-    local exactEquipped = false
-    for candidateIndex, localCFrame in ipairs(placementSlots) do
-            if candidateIndex > 4 then break end
-            -- Suji sends the inventory UID directly to RequestPlaceEgg. Do
-            -- this before the optional equip fallback so a missing/late Tool
-            -- visual cannot prevent an egg already present in EggInventory
-            -- from being placed for the Rift quest.
-            local placed = requestRiftPlaceEgg(uid, localCFrame)
-            -- Keep the canonical PlantEgg path available before the optional
-            -- equip retry; it can place an inventory UID even while the Tool
-            -- replica is one frame behind.
-            if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
+        -- Use the same placement primitive as the normal Suji-style egg flow.
+        -- This keeps the UID, plot-slot generation, equip fallback and server
+        -- request order identical for a freshly revealed Rift reward.
+        local placed, status = HUB.SujiPlaceEggInPen(uid, true)
+        if status == "far" then
+            local center = GetLocalPlotCenter()
+            if center and HUB.StealGlide.To(center, math.min(glideSpeed, 300), nil) == true then
+                task.wait(0.40)
+                placed, status = HUB.SujiPlaceEggInPen(uid, true)
             end
-            -- One bounded equip attempt for the whole placement operation,
-            -- never once per candidate slot.
-            if not placed and not equipAttempted then
-                equipAttempted = true
-                exactEquipped = equipEggExact(uid) == true
-            end
-            if not placed and exactEquipped then
-                placed = requestRiftPlaceEgg(uid, localCFrame)
-                if not placed and EggState and type(EggState.PlantEgg) == "function" then
-                    pcall(function() placed = EggState.PlantEgg(uid, localCFrame) == true end)
-                end
-            end
-            -- Placement is replicated asynchronously. Wait for the exact UID
-            -- to show a Placement record instead of treating a local request
-            -- return value as success and immediately moving on to trading.
-            local placementDeadline = os.clock() + 0.55
-            while os.clock() < placementDeadline and not HUB.dead do
-                task.wait(0.08)
-                local refreshed = HUB.ReadRiftInventoryRealtime()
-                local _, refreshedEgg = getRiftEggInventoryEntry(refreshed, uid)
-                if riftIsPlacedEgg(refreshedEgg) then
-                    return true, label .. " placed"
-                end
-            end
-            -- Keep a successful client-side PlantEgg result as a last-resort
-            -- fallback for builds that do not mirror Placement back locally.
-            if placed then return true, label .. " placed" end
         end
+        if placed then return true, label .. " placed" end
+        if status == "skip" then return true, label .. " already placed" end
         return false, label .. " — the pen is full or placement was rejected"
     end)
     rift.placing = false
@@ -7174,6 +7250,19 @@ function riftRecipeAllowed(state)
         end
     end
     return eventState.rift.keepMode == "Any ticked" and selected > 0 or total > 0 and selected == total
+end
+
+function riftEggInventoryKeySet(save)
+    local keys = {}
+    for uid, egg in pairs(type(save) == "table" and save.EggInventory or {}) do
+        keys[tostring(uid)] = true
+        if type(egg) == "table" then
+            local itemUid = egg.Uid or egg.UID or egg.EggUid or egg.EggUID
+                or egg.AssetUid or egg.AssetUID
+            if itemUid ~= nil then keys[tostring(itemUid)] = true end
+        end
+    end
+    return keys
 end
 
 -- After Rift:AskFinishReveal the reward can take several replication frames to
@@ -7326,8 +7415,20 @@ function riftCycle(allowActions)
         return false
     end
     if state.PendingReward then
-        if allowActions then select(1, invokeEventRemote("Rift", "AskFinishReveal")) end
-        rift.status, rift.detail = "reward", "Claiming the Rift drop"
+        if allowActions then
+            -- Keep the same reward hand-off state used after AskTradeIn.  If
+            -- the first reveal call was one frame early, the next pass must
+            -- still wait for the new EggInventory UID and place it instead of
+            -- merely claiming PendingReward forever.
+            rift.awaitingReward = true
+            rift.rewardBeforeInventory = riftEggInventoryKeySet(HUB.ReadRiftInventoryRealtime())
+            local finishResult = select(1, invokeEventRemote("Rift", "AskFinishReveal"))
+            rift.rewardPayload = { FinishResult = { Reward = finishResult } }
+            rift.rewardWaitUntil = os.clock() + 6.0
+        end
+        rift.status, rift.detail = "reward", allowActions
+            and "Claiming the Rift drop and waiting for its egg UID"
+            or "Waiting to claim the Rift drop"
         publishEvent("The Rift", rift.detail, rift.status)
         return true
     end
@@ -7553,19 +7654,28 @@ function riftCycle(allowActions)
             task.wait(0.15)
         end
     end
-    local beforeInventory = {}
-    for uid in pairs(save.EggInventory or {}) do beforeInventory[tostring(uid)] = true end
+    -- Take the comparison snapshot immediately before AskTradeIn, like
+    -- Suji.  The earlier quest scan can be several frames old after an egg
+    -- hatch, which made the newly revealed reward look like an existing UID.
+    local beforeInventory = riftEggInventoryKeySet(HUB.ReadRiftInventoryRealtime())
     local tradeCallOk, traded, tradeResult = pcall(riftTradeQuestOffers, offers)
     if not tradeCallOk then traded, tradeResult = false, nil end
     HUB.StealGlide.owner = previousTradeOwner
     if allowActions and not tradeNoClipWasActive then HUB.StopRiftNoClip() end
     if traded then
         rift.traded += 1
-        task.wait(0.30)
+        -- Suji waits for the trade acknowledgement to settle before asking
+        -- the server to reveal the reward.  A 0.30s call can hit the old
+        -- PendingReward state and leave the Rift Egg absent from EggInventory.
+        task.wait(0.60)
         -- The reward UID is returned by AskFinishReveal on some revisions and
         -- by AskTradeIn on others. Keep both responses until EggInventory has
         -- replicated, then place the exact UID.
         local finishResult = select(1, invokeEventRemote("Rift", "AskFinishReveal"))
+        -- The reveal response and Save.Get() are separate replicas.  Give the
+        -- reward stream the same short window Suji uses before the first UID
+        -- comparison; queueNewRiftRewardEggs still keeps its bounded retry.
+        task.wait(0.80)
         -- Pass the accepted response too.  Some builds replicate the reward
         -- under an existing inventory key, so a before/after key comparison
         -- alone cannot identify the UID that must be placed.
@@ -9353,7 +9463,7 @@ end)
 -- trusting one exact field name/casing.
 HUB.RarityCanonical = {
     titan = "Titan", divine = "Divine", transcendent = "Transcendent", superior = "Superior",
-    eternal = "Eternal", ethereal = "Eternal", etheral = "Eternal", limited = "Limited", secret = "Secret", exotic = "Exotic",
+    eternal = "Eternal", ethernal = "Eternal", ethereal = "Eternal", etheral = "Eternal", limited = "Limited", secret = "Secret", exotic = "Exotic",
     cosmic = "Cosmic", exclusive = "Exclusive", admin = "Admin", mythic = "Mythical",
     mythical = "Mythical", prismatic = "Prismatic", rainbow = "Rainbow", ["squishy god"] = "Squishy God",
     brainrotgod = "BrainrotGod", legendary = "Legendary", epic = "Epic", rare = "Rare",
@@ -9370,7 +9480,9 @@ HUB.LiveRarityScores = {}
 
 HUB.RarityKey = function(value)
     local text = tostring(value or ""):lower()
-    text = text:gsub("[%s_%-]+", "")
+    -- Catalog ids have appeared as `Eternal`, `etheral`, `Etheral `, and with
+    -- punctuation from display labels. Keep every spelling on one key.
+    text = text:gsub("[^%w]+", "")
     return text
 end
 
@@ -9452,14 +9564,36 @@ end
 HUB.ReadRarityValue = function(container)
     if type(container) ~= "table" then return nil end
 
+    local function readKnown(value)
+        if value == nil then return nil end
+        local name, score = HUB.CanonicalRarity(value)
+        if not name then return nil, score end
+        local rawKey = HUB.RarityKey(value)
+        local nameKey = HUB.RarityKey(name)
+        local known = RARITY_SCORE_MAP[name] ~= nil
+            or HUB.RarityCanonical[rawKey] ~= nil
+            or HUB.RarityCanonical[nameKey] ~= nil
+            or (type(HUB.LiveRarityAliases) == "table" and HUB.LiveRarityAliases[rawKey] ~= nil)
+        return known and name or nil, score
+    end
+
+    -- Asset/Rarity catalog revisions do not use one consistent field. Read
+    -- the explicit rarity fields first, then the catalog identity fields only
+    -- when they canonicalize to a known rarity. This catches `_id = Etheral`
+    -- without mistaking an ordinary egg Name for its rarity.
     local candidates = {
         container.Rarity,
         container.RarityName,
         container.RarityType,
         container.RarityId,
+        container.DisplayRarity,
+        container.DisplayName,
+        container._id,
+        container.Id,
+        container.Name,
     }
     for _, value in ipairs(candidates) do
-        local name, score = HUB.CanonicalRarity(value)
+        local name, score = readKnown(value)
         if name then
             local numeric = (type(value) == "table" and tonumber(value.RarityNumber))
             return name, (numeric and numeric * 100) or score
@@ -9468,7 +9602,10 @@ HUB.ReadRarityValue = function(container)
 
     local attrs = container.Attributes
     if type(attrs) == "table" then
-        local name, score = HUB.CanonicalRarity(attrs.Rarity or attrs.RarityName or attrs.RarityType or attrs.RarityId)
+        local name, score = readKnown(
+            attrs.Rarity or attrs.RarityName or attrs.RarityType or attrs.RarityId
+                or attrs.DisplayRarity or attrs.DisplayName or attrs._id
+        )
         if name then return name, score end
     end
 
@@ -9477,6 +9614,9 @@ end
 
 HUB.GetEggRarityInfo = function(egg)
     if type(egg) ~= "table" then return "Common", 100 end
+
+    local category = egg.AssetCategory or egg.Category or egg.EggName
+        or egg.AssetId or egg.EggId or egg.Id or egg.Name
 
     -- Match Suji's source of truth: resolve the field record's Category from
     -- the live Assets catalog first. A stale/partial field record can carry a
@@ -9489,7 +9629,7 @@ HUB.GetEggRarityInfo = function(egg)
         -- could resolve the wrong catalog entry and make a selected rarity
         -- appear to match an unrelated egg.  Keep AssetCategory first.
         local identifiers = {
-            egg.AssetCategory, egg.Category, egg.EggName, egg.AssetId,
+            category, egg.AssetCategory, egg.Category, egg.EggName, egg.AssetId,
             egg.EggId, egg.Id, egg.Name,
         }
         for _, id in ipairs(identifiers) do
@@ -9498,6 +9638,24 @@ HUB.GetEggRarityInfo = function(egg)
             if name then
                 return name, RARITY_SCORE_MAP[name] or score or 100
             end
+        end
+    end
+
+    -- Match Suji's PhysicalModel override. A streamed field record can omit
+    -- Rarity while the live model still exposes `Rarity`, `RarityTier`, or
+    -- `Tier`; read those before falling back to the category rank.
+    local physicalModel = egg.PhysicalModel
+    if physicalModel then
+        local modelValue
+        pcall(function()
+            modelValue = physicalModel:GetAttribute("Rarity")
+                or physicalModel:GetAttribute("RarityTier")
+                or physicalModel:GetAttribute("Tier")
+        end)
+        local modelName, modelScore = HUB.CanonicalRarity(modelValue)
+        if modelName and (RARITY_SCORE_MAP[modelName] ~= nil
+            or HUB.RarityCanonical[HUB.RarityKey(modelValue)] ~= nil) then
+            return modelName, RARITY_SCORE_MAP[modelName] or modelScore or 100
         end
     end
 
@@ -12113,7 +12271,7 @@ HUB.ReadTreadmillSpeedState = function()
     pcall(function()
         local sample = GetEggTravelSpeedSample()
         if type(sample) == "table" then
-            for _, key in ipairs({"walkSpeed", "playerSpeed", "characterSpeed", "saveSpeed"}) do
+            for _, key in ipairs({"walkSpeed", "playerSpeed", "characterSpeed", "saveSpeed", "speedStat", "webSpeed"}) do
                 state[key] = tonumber(sample[key])
             end
         end
@@ -12132,6 +12290,7 @@ HUB.TreadmillSpeedRose = function(before, after)
         playerSpeed = 0.5,
         characterSpeed = 0.5,
         saveSpeed = 0.1,
+        speedStat = 0.1,
         webSpeed = 0.1,
     }
     for key, threshold in pairs(thresholds) do
