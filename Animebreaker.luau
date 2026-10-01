@@ -1,7 +1,7 @@
 --[[
    AXEL HUB · ANIME BREAKER
    Interface: AxelUI · Gold & Obsidian
-   Gameplay functions: cook45 x clack, latest supplied source (211457)
+   Gameplay functions: cook45 x clack, latest supplied source (213712)
    Target Place: 109928390521457
 ]]
 
@@ -171,7 +171,7 @@ local CFG = {
     TargetMonsterFilterMulti = {"All"},
     AutoMarineInvasion = false,
     InvasionDifficulty = "Easy",
-    InvasionAutoLeave = true,
+    InvasionAutoLeave = false,
 
     -- Combat
     AutoClick           = false,
@@ -208,7 +208,7 @@ local CFG = {
     AutoRaid              = false,
     RaidTargetMap         = "DBZ",
     AutoFarmTicketIfNone  = false,
-    AutoReturnHome        = true,
+    AutoReturnHome        = false,
     RaidCustomExitRoom    = false,
     RaidExitRoom          = 5,
 
@@ -278,7 +278,7 @@ local CFG = {
 
     -- Balanced System Unlocker (Round-Robin) & Map Unlocks
     BalancedUnlocker        = false,
-    AutoUnlockAllMapSystems = true,
+    AutoUnlockAllMapSystems = false,
 
     -- Auto Equip Best (Global Boost + Individual + Title + Multi-systems)
     AutoEquipBest         = false,
@@ -308,21 +308,21 @@ local CFG = {
     AutoUpgradeWarrior    = false,
     AutoUnlockWarrior     = false,
     WarriorSelectedUpgradeNames = {"Energy", "Damage", "Gold", "AttackRange"},
-    BalanceWarriorUpgrades = true,
+    BalanceWarriorUpgrades = false,
     WarriorUpgradePriority= "All (Balanced)",
     AutoOfflineUpgrades   = false,
     AutoUnlockOffline     = false,
     OfflineSelectedUpgradeNames = {"Dreamer (Offline Energy)", "Hoarder (Offline Gold)", "Hibernation (Offline Max Time)"},
-    BalanceOfflineUpgrades= true,
+    BalanceOfflineUpgrades= false,
     AutoUpgradeTT         = false,
-    BalanceTTUpgrades     = true,
+    BalanceTTUpgrades     = false,
     AutoUpgradePortal     = false,
     AutoUnlockPortal      = false,
-    BalancePortalUpgrades = true,
+    BalancePortalUpgrades = false,
     PortalSelectedUpgradeNames = {"Energy", "Damage", "MaxEnemy", "WarriorDropChance"},
     AutoUpgradeClassTree  = false,
     AutoUnlockClassTree   = false,
-    BalanceClassTreeUpgrades = true,
+    BalanceClassTreeUpgrades = false,
     ClassTreeSelectedUpgradeNames = {"Start", "Energy", "Damage", "Gold", "CritChance", "CritDMG", "WalkSPD"},
     AutoUpgradeNinja      = false,
     AutoUnlockNinja       = false,
@@ -330,14 +330,14 @@ local CFG = {
     AutoUnlockAnt         = false,
     AutoUpgradeTotems     = false,
     AutoUpgrade           = false,
-    BalanceGlobalUpgrades = true,
+    BalanceGlobalUpgrades = false,
     SelectedGlobalUpgrades= {"Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades", "Portal Upgrades", "Class Tree", "Ninja Progression", "Ant Progression"},
 
     -- Merge & Crafting
     AutoMergeAll          = false,
     AutoCraft             = false,
     CraftMaxTier          = 6,
-    CraftSelection        = { Ring = true, Collar = true, Earring = true },
+    CraftSelection        = { Ring = false, Collar = false, Earring = false },
 
     -- Auto Claim
     AutoClaimAll          = false,
@@ -369,7 +369,6 @@ local CFG = {
     NoClip                = false,
 
     -- Profiles & category cleanup
-    AutoSell = false,
     AutoLoadConfig = false,
     SelectedConfigName = "default",
     DeleteRaritySelection = {
@@ -380,8 +379,8 @@ local CFG = {
     },
 
     -- Anti-AFK & Rejoin
-    AntiAFK               = true,
-    AutoRejoin            = true,
+    AntiAFK               = false,
+    AutoRejoin            = false,
 }
 
 local RarityToggles = {
@@ -2184,12 +2183,48 @@ local function getGamemodeEnemies()
     return list
 end
 
+local function handleAutoReturnHome()
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    local results = pg and pg:FindFirstChild("Results")
+    if results and results.Enabled then
+        local content = results:FindFirstChild("Content")
+        local buttons = content and content:FindFirstChild("Buttons")
+        local returnBtn = buttons and buttons:FindFirstChild("Return")
+        if returnBtn then
+            returnBtn.Visible = true
+            pcall(function()
+                if firesignal then
+                    firesignal(returnBtn.MouseButton1Click)
+                    firesignal(returnBtn.Activated)
+                end
+                if getconnections then
+                    for _, conn in ipairs(getconnections(returnBtn.MouseButton1Click)) do
+                        conn:Fire()
+                    end
+                    for _, conn in ipairs(getconnections(returnBtn.Activated)) do
+                        conn:Fire()
+                    end
+                end
+            end)
+            pcall(function()
+                local GuiService = Library and Library:GetService("GuiService")
+                if GuiService then
+                    GuiService.SetScreens(true, { "SideGUI", "Utils" }, true)
+                end
+            end)
+            results.Enabled = false
+        end
+    end
+end
+
 local function doJoinTimeTrial(diff)
-    pcall(function()
+    if not (Library and Library.Remote) then return false end
+    local ok = pcall(function()
         Library.Remote:Fire("GamemodeSystem", "Create", "Time Trial", "The Hallway", diff or "Easy", false)
         Library.Remote:Fire("GamemodeSystem", "Enter", "Time Trial", "The Hallway", diff or "Easy", true)
         Library.Remote:Fire("GamemodeSystem", "Start", "Time Trial", true)
     end)
+    return ok
 end
 
 local ttCurrentActiveDiff = nil
@@ -2210,20 +2245,36 @@ local function getSelectedTTDiffs()
     return { "Easy" }
 end
 
--- เช็ค window.Open == true สำหรับทุก difficulty ที่เลือก → คืนค่า diff + OpensAt
+-- Require GamemodeService ที่ทำงานได้จริง (Library.GamemodeService = nil ใน game นี้)
+local _GamemodeSvc = nil
+pcall(function()
+    _GamemodeSvc = require(game:GetService("ReplicatedStorage").Framework.Modules.Services.GamemodeService)
+end)
+
+-- คืนค่า diff + windowEpoch เมื่อ TT เปิดจริง (IsOpen = true + ไม่อยู่ใน server CD)
 local function getTTOpenWindow()
-    local gms = Library and Library.GamemodeService
-    if not (gms and gms.GetWindow) then return nil, nil end
+    local gms = _GamemodeSvc
+    local nowTick = os.time()
+
+    -- epoch ทุก 30 นาที → ป้องกัน join ซ้ำใน window เดิม
+    local windowEpoch = math.floor(nowTick / 1800)
 
     local pd = Library and Library.PlayerData
-    local nowTick = os.clock()
 
     for _, diff in ipairs(getSelectedTTDiffs()) do
-        local s, win = pcall(function()
-            return gms.GetWindow("Time Trial", "The Hallway", diff)
-        end)
-        if s and win and win.Open == true then
-            -- เช็ค server-side cooldown ด้วย (ถ้า player ยังอยู่ใน CD ก็ข้ามไป)
+        local isOpen = false
+        if gms and gms.IsOpen then
+            local ok, res = pcall(function()
+                return gms:IsOpen("Time Trial", "The Hallway", diff)
+            end)
+            isOpen = ok and res == true
+        else
+            -- fallback: สมมติว่าเปิดตลอด (ไม่มี API)
+            isOpen = true
+        end
+
+        if isOpen then
+            -- เช็ค server-side cooldown
             local onCooldown = false
             if pd and pd.Gamemodes and pd.Gamemodes["Time Trial"] then
                 local cd = pd.Gamemodes["Time Trial"].Cooldown
@@ -2232,7 +2283,7 @@ local function getTTOpenWindow()
                 end
             end
             if not onCooldown then
-                return diff, win.OpensAt
+                return diff, windowEpoch
             end
         end
     end
@@ -2248,6 +2299,9 @@ local function handleTimeTrialLoop(now)
         ttLastJoinOpensAt = nil
         return false
     end
+
+    -- Shared Instant Return setting for Time Trial and Raid results.
+    if CFG.AutoReturnHome ~= false then handleAutoReturnHome() end
 
     local inTT = isPlayerInTimeTrial()
 
@@ -2265,10 +2319,11 @@ local function handleTimeTrialLoop(now)
             if diff and opnsAt ~= ttLastJoinOpensAt then
                 if now - TIMERS.lastTimeTrialJoinAttempt >= 3.0 then
                     TIMERS.lastTimeTrialJoinAttempt = now
-                    ttHasJoinedOnce = true
-                    ttLastJoinOpensAt = opnsAt  -- mark window นี้ว่าใช้แล้ว
-                    ttCurrentActiveDiff = diff
-                    doJoinTimeTrial(diff)
+                    if doJoinTimeTrial(diff) then
+                        ttHasJoinedOnce = true
+                        ttLastJoinOpensAt = opnsAt
+                        ttCurrentActiveDiff = diff
+                    end
                 end
             end
         end
@@ -2354,40 +2409,6 @@ local function handleAutoMarineInvasion(now)
 end
 
 
-
-local function handleAutoReturnHome()
-    local pg = lp and lp:FindFirstChild("PlayerGui")
-    local results = pg and pg:FindFirstChild("Results")
-    if results and results.Enabled then
-        local content = results:FindFirstChild("Content")
-        local buttons = content and content:FindFirstChild("Buttons")
-        local returnBtn = buttons and buttons:FindFirstChild("Return")
-        if returnBtn then
-            returnBtn.Visible = true
-            pcall(function()
-                if firesignal then
-                    firesignal(returnBtn.MouseButton1Click)
-                    firesignal(returnBtn.Activated)
-                end
-                if getconnections then
-                    for _, conn in ipairs(getconnections(returnBtn.MouseButton1Click)) do
-                        conn:Fire()
-                    end
-                    for _, conn in ipairs(getconnections(returnBtn.Activated)) do
-                        conn:Fire()
-                    end
-                end
-            end)
-            pcall(function()
-                local GuiService = Library and Library:GetService("GuiService")
-                if GuiService then
-                    GuiService.SetScreens(true, { "SideGUI", "Utils" }, true)
-                end
-            end)
-            results.Enabled = false
-        end
-    end
-end
 
 local function handleAutoRaidLoop(now)
     if not CFG.AutoRaid then return false end
@@ -3882,7 +3903,6 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
     if anyCleanEnabled and (now - TIMERS.lastSell >= 2.0) then
         TIMERS.lastSell = now
         doAutoDelete()
-        if CFG.AutoSell then doAutoSell() end
     end
 end)
 
@@ -3979,7 +3999,20 @@ local function checkAutoLoadConfig()
     end
     if CFG.AutoLoadConfig then loadConfigFile("default") end
 end
+local function disableStartupToggles()
+    for key, value in pairs(CFG) do
+        if type(value) == "boolean" then CFG[key] = false end
+    end
+    if type(CFG.CraftSelection) == "table" then
+        for _, category in ipairs({"Ring", "Collar", "Earring"}) do
+            CFG.CraftSelection[category] = false
+        end
+    end
+    disableNoClip()
+end
+
 pcall(checkAutoLoadConfig)
+disableStartupToggles()
 
 
 -- Bundled AxelUI: a single file with no remote UI loader.
@@ -9396,6 +9429,13 @@ Tabs.Events = function(win)
             end
         end
     })
+    TabEvents:Toggle({
+        ConfigKey = "AutoReturnHome",
+        Title = "Instant Return",
+        Desc = "Returns immediately after Time Trial results. This setting also controls Raid result return.",
+        Value = CFG.AutoReturnHome,
+        Callback = function(v) CFG.AutoReturnHome = v end
+    })
     TabEvents:Dropdown({
         ConfigKey = "TTDifficulties",
         Title = "Trial Difficulties",
@@ -9427,8 +9467,8 @@ Tabs.Events = function(win)
         Title = "Enter Time Trial",
         Desc = "Joins a trial using the first selected difficulty.",
         Callback = function()
-            local openDiff = getAvailableTimeTrialDiff() or (getSelectedTTDifficulties()[1]) or "Easy"
-            doJoinTimeTrial(openDiff)
+            local openDiff = getTTOpenWindow() or getSelectedTTDiffs()[1] or "Easy"
+            if not doJoinTimeTrial(openDiff) then return end
             CFG.AutoTimeTrialDungeon = true
             CFG.AutoFarm = true
             CFG.AutoClick = true
@@ -10466,18 +10506,6 @@ Tabs.Delete = function(win)
             end
         })
     end
-    TabDelete:Section({ Title = "Auto Sell" })
-    TabDelete:Toggle({
-        Title = "Auto Sell Items", ConfigKey = "AutoSell",
-        Desc = "Sells unequipped items of the selected rarities across all inventory categories, including locked items.",
-        Value = CFG.AutoSell, Callback = function(v) CFG.AutoSell = v end
-    })
-    TabDelete:Dropdown({
-        Title = "Sell Rarities", ConfigKey = "SellSelectedRarities", Multi = true,
-        Desc = "Choose rarities to sell. An empty list sells nothing.", Values = ALL_RARITY_NAMES,
-        Value = CFG.SellSelectedRarities or {}, Callback = function(v) CFG.SellSelectedRarities = v end
-    })
-
 end
 
 -- ══════════════════════════════════════════════════════════
@@ -10603,7 +10631,7 @@ Tabs.Config = function(win)
     TabConfig:Toggle({
         ConfigKey = "AutoLoadConfig",
         Title = "Load Profile at Startup",
-        Desc = "Loads the selected profile the next time the script starts.",
+        Desc = "Restores saved selections at startup. Every switch still starts off.",
         Value = CFG.AutoLoadConfig,
         Callback = function(v)
             CFG.AutoLoadConfig = v
