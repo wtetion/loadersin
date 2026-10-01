@@ -140,11 +140,7 @@ local CFG = {
     AutoUpgradeTT         = false,
     TTUpgradePriority     = "Upgrade All",
     AutoBuyTTShop         = false,
-    TTShopSelection       = {
-        EnergyPotion1 = true, DamagePotion1 = true, GoldPotion1 = true,
-        LuckPotion1 = true, DropPotion1 = true, EnergyPotion2 = true,
-        DamagePotion2 = true, GoldPotion2 = true, LuckPotion2 = true, DropPotion2 = true
-    },
+    TTShopSelection       = {},
     AutoBuyPirateShop     = false,
     PirateShopSelection   = {
         EnergyJuice1 = true, DamageJuice1 = true, GoldJuice1 = true, DropJuice1 = true, LuckJuice1 = true
@@ -196,7 +192,7 @@ local CFG = {
     EquipBestJewel        = false,
     EquipBestWing         = false,
     EquipBestTitle        = false,
-    TTSelectedPotionNames = {"Energy Potion I (200)", "Damage Potion I (200)", "Gold Potion I (200)", "Luck Potion I (300)", "Drop Potion I (400)", "Energy Potion II (500)", "Damage Potion II (500)", "Gold Potion II (500)", "Luck Potion II (600)", "Drop Potion II (1000)"},
+    TTSelectedPotionNames = {},
     TTSelectedUpgradeNames = {"Breaker (Damage +5%)", "Relentless (Energy +5%)", "Scavenger (Gold +5%)", "Overdrive (AtkSPD +2.5%)"},
     TTShopBuyAmountStr    = "1x",
     TTShopBuyAmount       = 1,
@@ -215,6 +211,8 @@ local CFG = {
     AutoOfflineUpgrades   = false,
     AutoUnlockOffline     = false,
     AutoUpgrade           = false,
+    BalanceGlobalUpgrades = true,
+    SelectedGlobalUpgrades= {"Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades", "Portal Upgrades", "Class Tree"},
 
     -- Merge & Crafting
     AutoMergeAll          = false,
@@ -1961,20 +1959,256 @@ local function handleAutoRaceSpin(now)
     end
 end
 
+-- BEGIN SRC2 BALANCED UPGRADE MERGE
+local UPGRADE_SYSTEM_DATA = {
+    ["Warrior Upgrades"] = {
+        Currency = "WarriorCoins",
+        Targets = {
+            Energy      = { MaxLevel = 20 },
+            Damage      = { MaxLevel = 20 },
+            Gold        = { MaxLevel = 20 },
+            AttackRange = { MaxLevel = 12 }
+        }
+    },
+    ["Offline Upgrades"] = {
+        Currency = "OfflineCoins",
+        Targets = {
+            Energy  = { MaxLevel = 20 },
+            Gold    = { MaxLevel = 20 },
+            MaxTime = { MaxLevel = 20 }
+        }
+    },
+    ["Time Trial Upgrades"] = {
+        Currency = "TrialShards",
+        Targets = {
+            Energy = { MaxLevel = 20 },
+            Damage = { MaxLevel = 20 },
+            Gold   = { MaxLevel = 20 },
+            AtkSPD = { MaxLevel = 10 }
+        }
+    },
+    ["Portal Upgrades"] = {
+        Currency = "PortalCoins",
+        Targets = {
+            Energy            = { MaxLevel = 10 },
+            Damage            = { MaxLevel = 10 },
+            MaxEnemy          = { MaxLevel = 5 },
+            WarriorDropChance = { MaxLevel = 5 }
+        }
+    },
+    ["Class Tree"] = {
+        Currency = "ClassCoins",
+        Targets = {
+            Start      = { MaxLevel = 1 },
+            Energy     = { MaxLevel = 15 },
+            Damage     = { MaxLevel = 15 },
+            Gold       = { MaxLevel = 15 },
+            CritChance = { MaxLevel = 10 },
+            CritDMG    = { MaxLevel = 10 },
+            WalkSPD    = { MaxLevel = 10 }
+        }
+    }
+}
+
+-- Upgrade metadata and single-level purchases are merged from src 2.
+local UPGRADE_SYSTEM_NAMES = {
+    "Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades",
+    "Portal Upgrades", "Class Tree"
+}
+
+local UpgradeServiceRef = nil
+if Library and type(Library.GetService) == "function" then
+    local ok, service = pcall(function() return Library:GetService("UpgradeService") end)
+    if ok then UpgradeServiceRef = service end
+end
+
+-- Try the module separately: an unavailable Library:GetService must not
+-- prevent the module fallback or the live UpgradeData overrides.
+pcall(function()
+    local framework = ReplicatedStorage:FindFirstChild("Framework")
+    local modules = framework and framework:FindFirstChild("Modules")
+    local services = modules and modules:FindFirstChild("Services")
+    local serviceModule = services and services:FindFirstChild("UpgradeService")
+    if not UpgradeServiceRef and serviceModule then
+        UpgradeServiceRef = require(serviceModule)
+    end
+end)
+
+pcall(function()
+    local framework = ReplicatedStorage:FindFirstChild("Framework")
+    local modules = framework and framework:FindFirstChild("Modules")
+    local dataDir = modules and modules:FindFirstChild("Data")
+    local dataModule = dataDir and dataDir:FindFirstChild("UpgradeData")
+    if not dataModule then return end
+    local rawData = require(dataModule)
+    if type(rawData) ~= "table" then return end
+    for systemName, systemData in pairs(rawData) do
+        if type(systemData) == "table" and type(systemData.Targets) == "table" then
+            local config = UPGRADE_SYSTEM_DATA[systemName] or { Targets = {} }
+            config.Currency = systemData.Currency or config.Currency
+            for stat, targetData in pairs(systemData.Targets) do
+                if type(targetData) == "table" then
+                    local fallback = config.Targets[stat] or {}
+                    config.Targets[stat] = {
+                        MaxLevel = tonumber(targetData.MaxLevel) or fallback.MaxLevel or 999,
+                        Currency = targetData.Currency or systemData.Currency or fallback.Currency
+                    }
+                end
+            end
+            UPGRADE_SYSTEM_DATA[systemName] = config
+        end
+    end
+end)
+
+local UpgradeRequestState = {}
+
+local function getUpgradeLevel(upgrades, systemName, stat)
+    local entry = upgrades[systemName .. "_" .. stat]
+    if type(entry) == "table" then entry = entry.Level end
+    return tonumber(entry) or 0
+end
+
+local function normalizeUpgradeSystems()
+    local selected = CFG.SelectedGlobalUpgrades
+    if type(selected) ~= "table" then selected = UPGRADE_SYSTEM_NAMES end
+    local normalized = {}
+    for _, systemName in ipairs(UPGRADE_SYSTEM_NAMES) do
+        if table.find(selected, systemName) then
+            table.insert(normalized, systemName)
+        end
+    end
+    -- src 1 saved stat names here; src 2 selects named upgrade systems.
+    -- Migrate old, non-empty stat selections to the all-systems selection.
+    if #normalized == 0 and #selected > 0 then
+        for _, stat in ipairs(selected) do
+            if stat == "Energy" or stat == "Damage" or stat == "CritChance"
+                or stat == "CritDamage" or stat == "CritDMG" then
+                for _, systemName in ipairs(UPGRADE_SYSTEM_NAMES) do
+                    table.insert(normalized, systemName)
+                end
+                break
+            end
+        end
+    end
+    CFG.SelectedGlobalUpgrades = normalized
+    if CFG.BalanceGlobalUpgrades == nil then CFG.BalanceGlobalUpgrades = true end
+    return normalized
+end
+
+local function buyBalancedUpgrade(systemName, targetList, now, buyMax)
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return false end
+    local upgrades, items = pd.Upgrades, pd.Items
+    if type(upgrades) ~= "table" or type(items) ~= "table" then return false end
+    local config = UPGRADE_SYSTEM_DATA[systemName]
+    if not (config and config.Targets) then return false end
+    now = type(now) == "number" and now or os.clock()
+
+    local targets, seen = {}, {}
+    if targetList == nil then
+        for stat in pairs(config.Targets) do table.insert(targets, stat) end
+        table.sort(targets)
+    elseif type(targetList) == "table" then
+        for _, stat in ipairs(targetList) do
+            if config.Targets[stat] and not seen[stat] then
+                seen[stat] = true
+                table.insert(targets, stat)
+            end
+        end
+    end
+    if #targets == 0 then return false end
+
+    local state = UpgradeRequestState[systemName]
+    if not state then
+        state = { NextIndex = 1 }
+        UpgradeRequestState[systemName] = state
+    end
+    -- Warrior/Offline/TT and the global toggle can request the same system.
+    -- Give it one request slot, even when the server updates immediately.
+    if state.LastSentAt and now - state.LastSentAt < 0.35 then return false end
+    if state.PendingStat then
+        local current = getUpgradeLevel(upgrades, systemName, state.PendingStat)
+        if current == state.PendingLevel and now - state.PendingAt < 1.5 then
+            return false
+        end
+        -- A changed level confirms completion. An unconfirmed request may be
+        -- retried after the timeout; the tie cursor lets other equal stats try.
+        state.PendingStat = nil
+    end
+
+    local candidateStat, candidateIndex = nil, nil
+    local minLevel = math.huge
+    local start = ((state.NextIndex or 1) - 1) % #targets + 1
+    for offset = 0, #targets - 1 do
+        local index = (start + offset - 1) % #targets + 1
+        local stat = targets[index]
+        local target = config.Targets[stat]
+        local level = getUpgradeLevel(upgrades, systemName, stat)
+        local maxLevel = tonumber(target.MaxLevel) or 999
+        if level < maxLevel then
+            local unlocked = true
+            if UpgradeServiceRef and type(UpgradeServiceRef.IsUnlocked) == "function" then
+                local ok, value = pcall(function()
+                    return UpgradeServiceRef.IsUnlocked(pd, systemName, stat)
+                end)
+                if ok then unlocked = value end
+            end
+            if unlocked then
+                local price = nil
+                if UpgradeServiceRef and type(UpgradeServiceRef.CalculatePrice) == "function" then
+                    local ok, value = pcall(function()
+                        return UpgradeServiceRef.CalculatePrice(systemName, stat, level)
+                    end)
+                    if ok then price = tonumber(value) end
+                end
+                local currency = target.Currency or config.Currency
+                local balance = tonumber(items[currency]) or 0
+                if (price == nil or balance >= price) and level < minLevel then
+                    minLevel = level
+                    candidateStat, candidateIndex = stat, index
+                end
+            end
+        end
+    end
+    if not candidateStat then return false end
+
+    state.PendingStat = candidateStat
+    state.PendingLevel = minLevel
+    state.PendingAt = now
+    state.LastSentAt = now
+    state.NextIndex = candidateIndex % #targets + 1
+    local ok = pcall(function()
+        if buyMax == true then
+            -- Only the explicitly disabled Global Balance mode buys max.
+            Library.Remote:Fire("UpgradeSystem", "Buy", systemName, candidateStat, true)
+        else
+            Library.Remote:Fire("UpgradeSystem", "Buy", systemName, candidateStat)
+        end
+    end)
+    if not ok then state.PendingStat = nil end
+    return ok
+end
+
+local function handleAutoGlobalUpgrades(now)
+    if not CFG.AutoUpgrade or now - lastUpgrade < 0.4 then return end
+    lastUpgrade = now
+    for _, systemName in ipairs(normalizeUpgradeSystems()) do
+        buyBalancedUpgrade(systemName, nil, now, CFG.BalanceGlobalUpgrades == false)
+    end
+end
+
+-- END SRC2 BALANCED UPGRADE MERGE
+
 local function handleAutoWarriorUpgrade(now)
     if not CFG.AutoUpgradeWarrior then return end
-    if now - lastWarriorUp < 0.5 then return end
+    if now - lastWarriorUp < 0.4 then return end
     lastWarriorUp = now
 
     local priority = CFG.WarriorUpgradePriority
-    local statList = {"Energy", "Damage", "Gold", "AttackRange"}
-
     if priority == "All (Balanced)" then
-        for _, stat in ipairs(statList) do
-            Library.Remote:Fire("UpgradeSystem", "Buy", "Warrior Upgrades", stat, true)
-        end
+        buyBalancedUpgrade("Warrior Upgrades", {"Energy", "Damage", "Gold", "AttackRange"}, now)
     else
-        Library.Remote:Fire("UpgradeSystem", "Buy", "Warrior Upgrades", priority, true)
+        buyBalancedUpgrade("Warrior Upgrades", {priority}, now)
     end
 end
 
@@ -2043,12 +2277,10 @@ end
 
 local function handleAutoOfflineUpgrades(now)
     if not CFG.AutoOfflineUpgrades then return end
-    if now - lastOfflineUp < 1.0 then return end
+    if now - lastOfflineUp < 0.45 then return end
     lastOfflineUp = now
 
-    for _, stat in ipairs({"Energy", "Gold", "MaxTime"}) do
-        Library.Remote:Fire("UpgradeSystem", "Buy", "Offline Upgrades", stat, true)
-    end
+    buyBalancedUpgrade("Offline Upgrades", {"Energy", "Gold", "MaxTime"}, now)
 end
 
 local function doEquipBestTitle()
@@ -2162,9 +2394,11 @@ local PIRATE_JUICE_MAP = {
 
 local function doTimeTrialShopBuy()
     if not (Library and Library.Remote) then return end
+    local selected = CFG.TTSelectedPotionNames
+    if not selected or type(selected) ~= "table" then return end
     local amt = CFG.TTShopBuyAmount or 1
     for name, id in pairs(TT_POTION_MAP) do
-        if isItemInList(CFG.TTSelectedPotionNames, name) or isItemInList(CFG.TTShopSelection, id) then
+        if isItemInList(selected, name) then
             pcall(function()
                 Library.Remote:Fire("StockShopSystem", "Buy", "Time Trial", id, amt)
             end)
@@ -2184,15 +2418,18 @@ local function doPirateShopBuy()
     end
 end
 
-local function doTimeTrialUpgrade()
+local function doTimeTrialUpgrade(now)
     if not (Library and Library.Remote) then return end
     local selected = CFG.TTSelectedUpgradeNames or {}
+    local targets = {}
     for name, key in pairs(TT_UPGRADE_MAP) do
         if isItemInList(selected, name) then
-            pcall(function()
-                Library.Remote:Fire("UpgradeSystem", "Buy", "Time Trial Upgrades", key, true)
-            end)
+            table.insert(targets, key)
         end
+    end
+    table.sort(targets)
+    if #targets > 0 then
+        buyBalancedUpgrade("Time Trial Upgrades", targets, now)
     end
 end
 
@@ -2520,39 +2757,13 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
         handleAutoMarineInvasion(now)
     end
 
-    -- Global Upgrades (Multi-Dropdown & Balance)
-    if CFG.AutoUpgrade and (now - lastUpgrade >= 1.0) then
-        lastUpgrade = now
-        local selected = CFG.SelectedGlobalUpgrades or {"Damage", "Energy", "CritChance", "CritDamage"}
-        local pd = Library and Library.PlayerData
-        local currentUps = pd and (pd.Upgrades or pd.GlobalUpgrades) or {}
-
-        if CFG.BalanceGlobalUpgrades and #selected > 1 then
-            local minStat = selected[1]
-            local minLvl = math.huge
-            for _, u in ipairs(selected) do
-                local lvl = (currentUps[u] and (tonumber(currentUps[u].Level) or tonumber(currentUps[u]))) or 0
-                if lvl < minLvl then
-                    minLvl = lvl
-                    minStat = u
-                end
-            end
-            pcall(function()
-                Library.Remote:Fire("UpgradeSystem", "Buy", minStat, true)
-            end)
-        else
-            for _, u in ipairs(selected) do
-                pcall(function()
-                    Library.Remote:Fire("UpgradeSystem", "Buy", u, true)
-                end)
-            end
-        end
-    end
+    -- All selected systems share the single-level upgrade engine.
+    handleAutoGlobalUpgrades(now)
 
     -- Time Trial Upgrades & Shop
-    if CFG.AutoUpgradeTT and (now - lastTTUpgrade >= 2.0) then
+    if CFG.AutoUpgradeTT and (now - lastTTUpgrade >= 0.45) then
         lastTTUpgrade = now
-        doTimeTrialUpgrade()
+        doTimeTrialUpgrade(now)
     end
     if CFG.AutoBuyTTShop and (now - lastTTShopBuy >= 3.0) then
         lastTTShopBuy = now
@@ -2650,6 +2861,7 @@ local function loadConfigFile(name)
         for k, v in pairs(decoded) do
             CFG[k] = v
         end
+        normalizeUpgradeSystems()
         if AxelHubUI then AxelHubUI:SyncConfig() end
         print("[Axel Hub] Config loaded from " .. filePath)
     end
@@ -8512,7 +8724,7 @@ do
     })
     TabEquip:Dropdown({
         Title = "Warrior Stat Priority",
-        Desc = "Select priority attribute",
+        Desc = "All balances available stats one level at a time",
         Values = {"All (Balanced)", "Energy", "Damage", "Gold", "AttackRange"},
         ConfigKey = "WarriorUpgradePriority",
         Value = CFG.WarriorUpgradePriority,
@@ -8535,8 +8747,8 @@ do
         end
     })
     TabEquip:Toggle({
-        Title = "Auto Offline Upgrades",
-        Desc = "Upgrades offline rewards capacity",
+        Title = "Auto Offline Upgrades (Balanced)",
+        Desc = "Balances Energy, Gold and MaxTime one level at a time",
         ConfigKey = "AutoOfflineUpgrades",
         Value = CFG.AutoOfflineUpgrades,
         Callback = function(v) CFG.AutoOfflineUpgrades = v end
@@ -8549,24 +8761,24 @@ do
         Callback = function(v) CFG.AutoUnlockOffline = v end
     })
     TabEquip:Toggle({
-        Title = "Auto Global Upgrades",
-        Desc = "Buys selected upgrades continuously",
+        Title = "Auto Upgrade Selected Systems",
+        Desc = "Upgrades the chosen Warrior, Offline, TT, Portal or Class Tree systems",
         ConfigKey = "AutoUpgrade",
         Value = CFG.AutoUpgrade,
         Callback = function(v) CFG.AutoUpgrade = v end
     })
     TabEquip:Dropdown({
-        Title = "Select Stats to Upgrade",
-        Desc = "Choose which attributes to automatically upgrade",
+        Title = "Select Upgrade Systems",
+        Desc = "Choose which systems Auto Upgrade will purchase from",
         Multi = true,
-        Values = {"Damage", "Energy", "CritChance", "CritDamage"},
+        Values = UPGRADE_SYSTEM_NAMES,
         ConfigKey = "SelectedGlobalUpgrades",
-        Value = CFG.SelectedGlobalUpgrades or {"Damage", "Energy", "CritChance", "CritDamage"},
+        Value = CFG.SelectedGlobalUpgrades,
         Callback = function(v) CFG.SelectedGlobalUpgrades = v end
     })
     TabEquip:Toggle({
         Title = "Balanced Upgrades (Lowest Level First)",
-        Desc = "Balances upgrades evenly across chosen attributes",
+        Desc = "Lowest available level first; one level per purchase. Off = buy max",
         ConfigKey = "BalanceGlobalUpgrades",
         Value = CFG.BalanceGlobalUpgrades,
         Callback = function(v) CFG.BalanceGlobalUpgrades = v end
@@ -8644,7 +8856,7 @@ do
         Multi = true,
         Values = TT_POTION_NAMES,
         ConfigKey = "TTSelectedPotionNames",
-        Value = CFG.TTSelectedPotionNames or TT_POTION_NAMES,
+        Value = CFG.TTSelectedPotionNames or {},
         Callback = function(v)
             CFG.TTSelectedPotionNames = v
         end
@@ -8672,7 +8884,7 @@ do
     TabCons:Section({ Title = "Time Trial Stat Upgrades (TrialShards)" })
     TabCons:Toggle({
         Title = "Auto Time Trial Upgrades",
-        Desc = "Automatically purchases selected stat upgrades using TrialShards",
+        Desc = "Balances selected TT stats one level at a time using TrialShards",
         ConfigKey = "AutoUpgradeTT",
         Value = CFG.AutoUpgradeTT,
         Callback = function(v) CFG.AutoUpgradeTT = v end
@@ -8696,7 +8908,7 @@ do
     })
     TabCons:Button({
         Title = "Upgrade TT Stats NOW",
-        Desc = "Immediately purchases chosen Time Trial upgrades",
+        Desc = "Purchases one level of the lowest selected Time Trial stat",
         Callback = doTimeTrialUpgrade
     })
 
