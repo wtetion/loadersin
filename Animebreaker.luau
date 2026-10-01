@@ -1,31 +1,40 @@
 --[[
-═══════════════════════════════════════════════════════════════════════════════
-   AXEL HUB · ANIME BREAKER — AXELUI PREMIUM THEME
-   Author: cook45 x clack
-   UI Framework: AxelUI (bundled, with numbered step sliders)
-   Core Architecture: Sticky Target Locking Engine + Event Hierarchy
-   Target Place: Anime Breaker (109928390521457)
-═══════════════════════════════════════════════════════════════════════════════
---]]
+   AXEL HUB · ANIME BREAKER
+   Interface: AxelUI · Gold & Obsidian
+   Gameplay functions: cook45 x clack, latest supplied source (211457)
+   Target Place: 109928390521457
+]]
+
+if getgenv and type(getgenv()._AnimeBreakerCleanup) == "function" then
+    pcall(getgenv()._AnimeBreakerCleanup)
+    getgenv()._AnimeBreakerCleanup = nil
+end
 
 if _G.AnimeBreaker_HeartbeatConnection then
     pcall(function() _G.AnimeBreaker_HeartbeatConnection:Disconnect() end)
     _G.AnimeBreaker_HeartbeatConnection = nil
 end
-for _, key in ipairs({ "AnimeBreaker_AntiAFKConnection", "AnimeBreaker_RejoinConnection" }) do
-    if _G[key] then pcall(function() _G[key]:Disconnect() end); _G[key] = nil end
-end
 if _G.AnimeBreaker_NoClipConn then
     pcall(function() _G.AnimeBreaker_NoClipConn:Disconnect() end)
     _G.AnimeBreaker_NoClipConn = nil
 end
+for _, key in ipairs({ "AnimeBreaker_AntiAFKConnection", "AnimeBreaker_RejoinConnection" }) do
+    if _G[key] then pcall(function() _G[key]:Disconnect() end); _G[key] = nil end
+end
+if _G.AnimeBreaker_Connections then
+    for _, connection in ipairs(_G.AnimeBreaker_Connections) do
+        pcall(function() connection:Disconnect() end)
+    end
+end
+_G.AnimeBreaker_Connections = {}
+
 pcall(function()
     local CoreGui = game:GetService("CoreGui")
     local PlayerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
     local function purge(p)
         if not p then return end
         for _, c in ipairs(p:GetChildren()) do
-            if c.Name:find("WindUI") or c.Name:find("AngelHub") or c.Name:find("AnimeBreaker") then
+            if c.Name == "AxelHubAnimeBreaker" or c.Name:find("WindUI") or c.Name:find("AngelHub") or c.Name:find("AnimeBreaker") then
                 pcall(function() c:Destroy() end)
             end
         end
@@ -112,7 +121,58 @@ local ALL_ENEMY_OPTIONS = {
 -- ══════════════════════════════════════════════════════════
 -- CONFIGURATION
 -- ══════════════════════════════════════════════════════════
+local TIMERS = {
+    lastClick = 0,
+    lastSkill = 0,
+    lastCraft = 0,
+    lastClaim = 0,
+    lastLikeClaim = 0,
+    lastUpgrade = 0,
+    lastMerge = 0,
+    lastEquipBest = 0,
+    lastSell = 0,
+    lastRankUp = 0,
+    lastRaceSpin = 0,
+    lastWarriorUp = 0,
+    lastWeaponSpin = 0,
+    lastHeroPassive = 0,
+    lastOfflineUp = 0,
+    lastUnlockStep = 0,
+    lastQuestTick = 0,
+    lastPortalTick = 0,
+    lastTTUpgrade = 0,
+    lastTTShopBuy = 0,
+    lastPirateShopBuy = 0,
+    lastRaidStartAttempt = 0,
+    lastNewAreaTeleport = 0,
+    lastIndexMapTeleport = 0,
+    lastTeleportTick = 0,
+    lastQuestGachaSpin = 0,
+    lastQuestConsumableUse = 0,
+    lastSummonTick = 0,
+    lastGamemodeExitAttempt = 0,
+    lastTimeTrialJoinAttempt = 0,
+    lastInvasionJoinAttempt = 0,
+    lastRaidCreateAttempt = 0,
+    lastTitanSpin = 0,
+    lastHarborTick = 0,
+    lastCommandmentTick = 0,
+    lastJewelTick = 0,
+    lastPortalUp = 0,
+    lastClassTreeUp = 0,
+    lastNinjaUp = 0,
+    lastAntUp = 0,
+}
+local Window, AxelHubUI
+
 local CFG = {
+    AutoIndexFarm = false,
+    IndexFarmWorld = "Current Map",
+    TargetMonsterFilterMulti = {"All"},
+    AutoMarineInvasion = false,
+    InvasionDifficulty = "Easy",
+    InvasionAutoLeave = true,
+
     -- Combat
     AutoClick           = false,
     ClickDelay          = 0.05,
@@ -142,15 +202,13 @@ local CFG = {
     AutoBuyTTShop         = false,
     TTShopSelection       = {},
     AutoBuyPirateShop     = false,
-    PirateShopSelection   = {
-        EnergyJuice1 = true, DamageJuice1 = true, GoldJuice1 = true, DropJuice1 = true, LuckJuice1 = true
-    },
+    PirateShopSelection   = {},
 
     -- Priority 2: Auto Raid (Safe Entry + Exit Room + No Teleport Bug)
     AutoRaid              = false,
     RaidTargetMap         = "DBZ",
     AutoFarmTicketIfNone  = false,
-    AutoReturnHome        = false,
+    AutoReturnHome        = true,
     RaidCustomExitRoom    = false,
     RaidExitRoom          = 5,
 
@@ -162,23 +220,65 @@ local CFG = {
     AutoSummon            = false,
     SummonEgg             = "DBZ",
     SummonType            = "Pet",
+    SummonStopRarity      = "Mythical+",
 
     -- Auto Race Spin
     AutoRaceSpin          = false,
     AutoUnlockRace        = false,
     RaceStopRarity        = "Mythical",
 
-    -- Auto Weapon
+    -- Auto Titan Banner
+    AutoTitanSpin         = false,
+    AutoUnlockTitan       = false,
+    TitanStopRarity       = "Founding Titan (Secret)",
+
+    -- Auto Weapon & Passives
     AutoWeaponSummon      = false,
     AutoUnlockWeapon      = false,
+    WeaponT1StopRarity    = "Mythical+",
     AutoWeaponPassive     = false,
+    AutoUnlockWeaponPassive = false,
+    TargetWeaponPassive   = "Supreme Grade (Mythical+)",
 
     -- Auto Hero Passive
     AutoHeroPassive       = false,
     AutoUnlockHeroPassive = false,
+    TargetHeroPassive     = "Soul Breaker (Mythical+)",
 
-    -- Balanced System Unlocker (Round-Robin)
-    BalancedUnlocker      = false,
+    -- Auto Eye Technique (Naruto)
+    AutoEyeSpin           = false,
+    AutoUnlockEye         = false,
+    EyeStopRarity         = "Rinnegan (Mythical+)",
+
+    -- Auto Sin Gacha (Nanatsu)
+    AutoSinSpin           = false,
+    AutoUnlockSin         = false,
+    SinStopRarity         = "Pride (Mythical+)",
+
+    -- Auto Hunter Rank (SoloLeveling)
+    AutoHunterRankSpin    = false,
+    AutoUnlockHunter      = false,
+    HunterRankStopRarity  = "A-Rank (Mythical+)",
+
+    -- Auto Shadow Passive (SoloLeveling)
+    AutoShadowPassiveSpin = false,
+    AutoUnlockShadow      = false,
+    ShadowPassiveStopRarity = "Marshal (Mythical+)",
+
+    -- Auto Haki (OnePiece)
+    AutoHakiSpin          = false,
+    AutoUnlockHaki        = false,
+    HakiStopRarity        = "Conqueror (Mythical+)",
+
+    -- Auto Amulet Building (Nanatsu)
+    AutoAmuletSpin        = false,
+    AutoUnlockAmulet      = false,
+    AmuletCategory        = "Energy",
+    AmuletStopRarity      = "Tier V (Mythical+)",
+
+    -- Balanced System Unlocker (Round-Robin) & Map Unlocks
+    BalancedUnlocker        = false,
+    AutoUnlockAllMapSystems = true,
 
     -- Auto Equip Best (Global Boost + Individual + Title + Multi-systems)
     AutoEquipBest         = false,
@@ -196,29 +296,48 @@ local CFG = {
     TTSelectedUpgradeNames = {"Breaker (Damage +5%)", "Relentless (Energy +5%)", "Scavenger (Gold +5%)", "Overdrive (AtkSPD +2.5%)"},
     TTShopBuyAmountStr    = "1x",
     TTShopBuyAmount       = 1,
-    PirateSelectedJuiceNames = {"Energy Juice I (1000)", "Damage Juice I (1000)", "Gold Juice I (1000)", "Drop Juice I (1000)", "Luck Juice I (1000)"},
+    PirateSelectedJuiceNames = {},
     PirateShopBuyAmountStr = "1x",
     PirateShopBuyAmount   = 1,
     DeleteSelectedRarities = {"Common", "Rare", "Epic"},
     SellSelectedRarities  = {"Common", "Rare"},
     DeleteTargetCategories = {"Pets", "Weapons", "Wings", "Avatars", "Accessories", "Warriors", "Mounts", "Jewels"},
 
-    -- Auto Upgrades & Progression
+    -- Auto Upgrades & Progression (Multi-Select & Balance Modes)
     AutoRankUp            = false,
     AutoUpgradeWarrior    = false,
     AutoUnlockWarrior     = false,
+    WarriorSelectedUpgradeNames = {"Energy", "Damage", "Gold", "AttackRange"},
+    BalanceWarriorUpgrades = true,
     WarriorUpgradePriority= "All (Balanced)",
     AutoOfflineUpgrades   = false,
     AutoUnlockOffline     = false,
+    OfflineSelectedUpgradeNames = {"Dreamer (Offline Energy)", "Hoarder (Offline Gold)", "Hibernation (Offline Max Time)"},
+    BalanceOfflineUpgrades= true,
+    AutoUpgradeTT         = false,
+    BalanceTTUpgrades     = true,
+    AutoUpgradePortal     = false,
+    AutoUnlockPortal      = false,
+    BalancePortalUpgrades = true,
+    PortalSelectedUpgradeNames = {"Energy", "Damage", "MaxEnemy", "WarriorDropChance"},
+    AutoUpgradeClassTree  = false,
+    AutoUnlockClassTree   = false,
+    BalanceClassTreeUpgrades = true,
+    ClassTreeSelectedUpgradeNames = {"Start", "Energy", "Damage", "Gold", "CritChance", "CritDMG", "WalkSPD"},
+    AutoUpgradeNinja      = false,
+    AutoUnlockNinja       = false,
+    AutoUpgradeAnt        = false,
+    AutoUnlockAnt         = false,
+    AutoUpgradeTotems     = false,
     AutoUpgrade           = false,
     BalanceGlobalUpgrades = true,
-    SelectedGlobalUpgrades= {"Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades", "Portal Upgrades", "Class Tree"},
+    SelectedGlobalUpgrades= {"Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades", "Portal Upgrades", "Class Tree", "Ninja Progression", "Ant Progression"},
 
     -- Merge & Crafting
     AutoMergeAll          = false,
     AutoCraft             = false,
     CraftMaxTier          = 6,
-    CraftSelection        = { Ring = false, Collar = false, Earring = false },
+    CraftSelection        = { Ring = true, Collar = true, Earring = true },
 
     -- Auto Claim
     AutoClaimAll          = false,
@@ -249,55 +368,66 @@ local CFG = {
     InfHealth             = false,
     NoClip                = false,
 
+    -- Profiles & category cleanup
+    AutoSell = false,
+    AutoLoadConfig = false,
+    SelectedConfigName = "default",
+    DeleteRaritySelection = {
+        Pet = {"Common", "Rare"}, Weapon = {"Common", "Rare"},
+        Wing = {"Common", "Rare"}, Avatar = {"Common", "Rare"},
+        Accessory = {"Common", "Rare"}, Warrior = {"Common", "Rare"},
+        Mount = {"Common", "Rare"}, Jewel = {"Common", "Rare"}
+    },
+
     -- Anti-AFK & Rejoin
-    AutoLoadConfig        = false,
-    AntiAFK               = false,
-    AutoRejoin            = false,
+    AntiAFK               = true,
+    AutoRejoin            = true,
 }
 
 local RarityToggles = {
-    Pet       = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Weapon    = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Wing      = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Avatar    = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Accessory = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Warrior   = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Mount     = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
-    Jewel     = { Common = false, Rare = false, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Pet       = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Weapon    = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Wing      = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Avatar    = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Accessory = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Warrior   = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Mount     = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
+    Jewel     = { Common = true, Rare = true, Epic = false, Legendary = false, Mythical = false, Secret = false, Broken = false },
 }
 
 -- ══════════════════════════════════════════════════════════
 -- SYSTEM TIMERS & STICKY TARGET LOCKING STATE
 -- ══════════════════════════════════════════════════════════
-local lastClick       = 0
-local lastClaim       = 0
-local lastLikeClaim   = 0
-local lastUpgrade     = 0
-local lastMerge       = 0
-local lastEquipBest   = 0
-local lastSell        = 0
-local lastRankUp      = 0
-local lastRaceSpin    = 0
-local lastWarriorUp   = 0
-local lastWeaponSpin  = 0
-local lastHeroPassive = 0
-local lastOfflineUp   = 0
-local lastUnlockStep  = 0
-local lastQuestTick   = 0
-local lastPortalTick  = 0
-local lastTTUpgrade   = 0
-local lastTTShopBuy   = 0
-local lastPirateShopBuy = 0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 local raidEnteringTime = 0
-local lastRaidStartAttempt = 0
 
 local wallAttackStartTime = 0
 local wallCooldownStartTime = 0
 local isAttackingWall = false
 
--- STICKY TARGET LOCK: Once an enemy is chosen, stay locked until it is DEAD!
+-- STICKY TARGET LOCK & COMBAT CIRCLE MULTI-TARGET COVERAGE
 local currentLockedTargetUID = nil
+local currentCoveredTargetUIDs = {}
 
 local unlockSystemQueue = {
     { Id = "Gacha_Race", Name = "Race", CostKey = "Gold", CostAmt = 10000 },
@@ -320,29 +450,261 @@ local function getHum()
     return c and c:FindFirstChildOfClass("Humanoid")
 end
 
--- Rarity lookup
-local _GachaData = nil
-local function getRarityOrder(id)
-    if not _GachaData then
-        pcall(function()
-            _GachaData = require(ReplicatedStorage.Framework.Modules.Data.GachaData)
-        end)
+local noClipOriginal = setmetatable({}, { __mode = "k" })
+local function disableNoClip()
+    if noClipConn then noClipConn:Disconnect(); noClipConn = nil end
+    _G.AnimeBreaker_NoClipConn = nil
+    for part, original in pairs(noClipOriginal) do
+        if part.Parent then part.CanCollide = original end
     end
-    if not _GachaData then return 1 end
-    for _, pools in pairs(_GachaData) do
-        if type(pools) == "table" then
-            for rarity, items in pairs(pools) do
-                if type(items) == "table" then
-                    for _, item in pairs(items) do
-                        if item == id or (type(item) == "table" and item.Id == id) then
-                            return RARITY_LEVEL[rarity] or 1
-                        end
+    table.clear(noClipOriginal)
+end
+
+local function enableNoClip()
+    if noClipConn then return end
+    noClipConn = RunService.Stepped:Connect(function()
+        local character = getChar()
+        if not (CFG.NoClip and character) then return end
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if noClipOriginal[part] == nil then noClipOriginal[part] = part.CanCollide end
+                part.CanCollide = false
+            end
+        end
+    end)
+    _G.AnimeBreaker_NoClipConn = noClipConn
+end
+
+
+-- Unified Rarity Lookup across all game data modules
+local _ItemRarityCache = {}
+local _GachaDataRef = nil
+local _PetDataRef = nil
+local _WeaponDataRef = nil
+local _WarriorDataRef = nil
+local _AvatarDataRef = nil
+local _AccessoryDataRef = nil
+
+local function loadDataModules()
+    pcall(function()
+        local RS = game:GetService("ReplicatedStorage")
+        local Data = RS:FindFirstChild("Framework") and RS.Framework:FindFirstChild("Modules") and RS.Framework.Modules:FindFirstChild("Data")
+        if Data then
+            if not _GachaDataRef and Data:FindFirstChild("GachaData") then _GachaDataRef = require(Data.GachaData) end
+            if not _PetDataRef and Data:FindFirstChild("PetData") then _PetDataRef = require(Data.PetData) end
+            if not _WeaponDataRef and Data:FindFirstChild("WeaponData") then _WeaponDataRef = require(Data.WeaponData) end
+            if not _WarriorDataRef and Data:FindFirstChild("WarriorData") then _WarriorDataRef = require(Data.WarriorData) end
+            if not _AvatarDataRef and Data:FindFirstChild("AvatarData") then _AvatarDataRef = require(Data.AvatarData) end
+            if not _AccessoryDataRef and Data:FindFirstChild("AccessoryData") then _AccessoryDataRef = require(Data.AccessoryData) end
+        end
+    end)
+end
+
+local function getItemRarity(id)
+    if not id then return "Common", 1 end
+    if _ItemRarityCache[id] then
+        return _ItemRarityCache[id].Rarity, _ItemRarityCache[id].Order
+    end
+
+    loadDataModules()
+
+    local rarity = nil
+    local orderNum = nil
+
+    -- 1. Direct dictionary lookups by Id
+    if _PetDataRef and _PetDataRef[id] then
+        rarity = _PetDataRef[id].Rarity
+    elseif _WeaponDataRef and _WeaponDataRef[id] then
+        rarity = _WeaponDataRef[id].Rarity
+    elseif _GachaDataRef and _GachaDataRef[id] then
+        rarity = _GachaDataRef[id].Rarity
+        orderNum = _GachaDataRef[id].Order
+    elseif _WarriorDataRef and _WarriorDataRef[id] then
+        rarity = _WarriorDataRef[id].Rarity
+    elseif _AvatarDataRef and _AvatarDataRef[id] then
+        rarity = _AvatarDataRef[id].Rarity
+    elseif _AccessoryDataRef and _AccessoryDataRef[id] then
+        rarity = _AccessoryDataRef[id].Rarity
+    end
+
+    -- 2. Lookup by Name in GachaData, WeaponData, or PetData
+    if not rarity and _GachaDataRef then
+        for gId, gData in pairs(_GachaDataRef) do
+            if gData.Name == id or gId == id or gId:lower():find(tostring(id):lower()) or (gData.Name and gData.Name:lower():find(tostring(id):lower())) then
+                rarity = gData.Rarity
+                orderNum = gData.Order
+                break
+            end
+        end
+    end
+
+    if not rarity and _WeaponDataRef then
+        for wId, wData in pairs(_WeaponDataRef) do
+            if wData.Name == id or (wData.Name and wData.Name:lower():find(tostring(id):lower())) then
+                rarity = wData.Rarity
+                break
+            end
+        end
+    end
+
+    if not rarity and _PetDataRef then
+        for pId, pData in pairs(_PetDataRef) do
+            if pData.Name == id or (pData.Name and pData.Name:lower():find(tostring(id):lower())) then
+                rarity = pData.Rarity
+                break
+            end
+        end
+    end
+
+    rarity = rarity or "Common"
+    local order = RARITY_LEVEL[rarity] or 1
+    if orderNum and orderNum > 1000 then
+        local extractedRank = math.floor(orderNum / 1000)
+        if extractedRank > order then
+            order = extractedRank
+        end
+    end
+
+    _ItemRarityCache[id] = { Rarity = rarity, Order = order }
+    return rarity, order
+end
+
+local function getRarityOrder(id)
+    local _, order = getItemRarity(id)
+    return order
+end
+
+local _UI_TOGGLES = {}
+local function stopSpinToggle(key, sysName, itemName, itemRarity)
+    CFG[key] = false
+    if _UI_TOGGLES[key] then pcall(function() _UI_TOGGLES[key]:Set(false, true) end) end
+    if Window then
+        Window:Notify({
+            Title = (sysName or "Spin") .. " · Target Reached",
+            Description = tostring(itemName or "Target") .. (itemRarity and (" · " .. tostring(itemRarity)) or "") .. ". Auto spin stopped.",
+            Duration = 6
+        })
+    end
+end
+
+local function parseTargetRank(str, targetMap)
+    if not str or str == "Any" then return 0 end
+    if targetMap and targetMap[str] then return targetMap[str] end
+    local clean = tostring(str):gsub("%+", ""):gsub("%s*%(.-%)", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if RARITY_LEVEL[clean] then return RARITY_LEVEL[clean] end
+    local lower = tostring(str):lower()
+    if lower:find("exclusive") or lower:find("rgb") or lower:find("broken") then return 7 end
+    if lower:find("secret") or lower:find("tier vi") or lower:find("rank 6") then return 6 end
+    if lower:find("mythical") or lower:find("tier v") or lower:find("rank 5") then return 5 end
+    if lower:find("legendary") or lower:find("tier iv") or lower:find("rank 4") then return 4 end
+    if lower:find("epic") or lower:find("tier iii") or lower:find("rank 3") then return 3 end
+    if lower:find("rare") or lower:find("tier ii") or lower:find("rank 2") then return 2 end
+    if lower:find("common") or lower:find("tier i") or lower:find("rank 1") then return 1 end
+
+    loadDataModules()
+    if _GachaDataRef then
+        for gId, gData in pairs(_GachaDataRef) do
+            if gData.Name and (gData.Name:lower() == lower or gData.Name:lower():find(lower, 1, true)) then
+                if gData.Order and gData.Order > 1000 then
+                    return math.floor(gData.Order / 1000)
+                end
+                if gData.Rarity and RARITY_LEVEL[gData.Rarity] then
+                    return RARITY_LEVEL[gData.Rarity]
+                end
+            end
+        end
+    end
+
+    return 0
+end
+
+local function checkGachaStopCondition(gachaType, targetThresholdStr, specificCategory, targetMap)
+    local reqRank = parseTargetRank(targetThresholdStr, targetMap)
+    if reqRank <= 0 then return false end
+    local pd = Library and Library.PlayerData
+    if not pd then return false end
+
+    loadDataModules()
+
+    -- 1. Check PlayerData.Gacha
+    if pd.Gacha then
+        for id, v in pairs(pd.Gacha) do
+            local idStr = tostring(id)
+            if idStr:lower():find(gachaType:lower(), 1, true) then
+                if not specificCategory or idStr:lower():find(specificCategory:lower(), 1, true) then
+                    local rank = tonumber(idStr:match("(%d+)$")) or 0
+                    local gInfo = _GachaDataRef and _GachaDataRef[id]
+                    if (not rank or rank == 0) and gInfo and gInfo.Order then
+                        rank = math.floor(gInfo.Order / 1000)
+                    end
+                    if rank >= reqRank then
+                        local name = (gInfo and gInfo.Name) or (type(v) == "table" and (v.Name or v.Id)) or idStr
+                        local rarity = (gInfo and gInfo.Rarity) or ALL_RARITY_NAMES[rank] or ("Rank " .. rank)
+                        return true, name, rarity, rank
                     end
                 end
             end
         end
     end
-    return 1
+
+    -- 2. Check PlayerData.GachaEquipped (array of ID strings)
+    if pd.GachaEquipped then
+        for _, id in pairs(pd.GachaEquipped) do
+            local idStr = tostring(id)
+            if idStr:lower():find(gachaType:lower(), 1, true) then
+                if not specificCategory or idStr:lower():find(specificCategory:lower(), 1, true) then
+                    local rank = tonumber(idStr:match("(%d+)$")) or 0
+                    local gInfo = _GachaDataRef and _GachaDataRef[id]
+                    if (not rank or rank == 0) and gInfo and gInfo.Order then
+                        rank = math.floor(gInfo.Order / 1000)
+                    end
+                    if rank >= reqRank then
+                        local name = (gInfo and gInfo.Name) or idStr
+                        local rarity = (gInfo and gInfo.Rarity) or ALL_RARITY_NAMES[rank] or ("Rank " .. rank)
+                        return true, name, rarity, rank
+                    end
+                end
+            end
+        end
+    end
+
+    -- 3. If Amulet, also check PlayerData.Amulets
+    if gachaType:lower():find("amulet") and pd.Amulets then
+        for aId, aData in pairs(pd.Amulets) do
+            local aStr = tostring(aId)
+            if not specificCategory or aStr:lower():find(specificCategory:lower(), 1, true) then
+                local rank = tonumber(aStr:match("(%d+)$")) or 0
+                if rank >= reqRank then
+                    local gInfo = _GachaDataRef and _GachaDataRef[aId]
+                    local name = (gInfo and gInfo.Name) or aStr
+                    local rarity = (gInfo and gInfo.Rarity) or ALL_RARITY_NAMES[rank] or ("Tier " .. rank)
+                    return true, name, rarity, rank
+                end
+            end
+        end
+    end
+
+    -- 4. If Weapon Passive, also check equipped weapon in pd.Weapons
+    if gachaType:lower():find("weapon") and pd.Equipped and pd.Equipped.Weapon and pd.Weapons then
+        local eqWep = pd.Weapons[pd.Equipped.Weapon]
+        local curPassive = eqWep and (eqWep.Passive or eqWep.WeaponPassive or eqWep.Skill)
+        if curPassive then
+            local rName, rOrder = getItemRarity(tostring(curPassive))
+            if rOrder >= reqRank then
+                return true, tostring(curPassive), rName, rOrder
+            end
+        end
+    end
+
+    -- 5. If Hero Passive, also check pd.HeroPassive
+    if gachaType:lower():find("hero") and pd.HeroPassive then
+        local rName, rOrder = getItemRarity(tostring(pd.HeroPassive))
+        if rOrder >= reqRank then
+            return true, tostring(pd.HeroPassive), rName, rOrder
+        end
+    end
+
+    return false
 end
 
 local function isItemInList(list, item)
@@ -364,7 +726,6 @@ local function getCurrentMap()
     return "DBZ"
 end
 
-local lastNewAreaTeleport = 0
 
 local function getHighestUnlockedMap()
     local pd = Library and Library.PlayerData
@@ -401,12 +762,15 @@ local function getActiveGamemode()
     local gm = workspace:FindFirstChild("_GAMEMODE")
     if gm then
         for _, child in ipairs(gm:GetChildren()) do
-            if child.Name == "Raid" or child.Name:find("Raid") then
+            local cName = child.Name:lower()
+            if cName:find("raid") then
                 return "Raid", child.Name
-            elseif child.Name == "Time Trial" or child.Name:find("Time") or child.Name:find("Trial") then
+            elseif cName:find("time") or cName:find("trial") then
                 return "Time Trial", child.Name
-            elseif child.Name == "Portal" or child.Name:find("Portal") then
+            elseif cName:find("portal") then
                 return "Portal", child.Name
+            elseif cName:find("invasion") then
+                return "Invasion", child.Name
             end
         end
     end
@@ -416,11 +780,39 @@ local function getActiveGamemode()
         if char:GetAttribute("InRaid") or char:GetAttribute("Raid") then return "Raid", "Raid" end
         if char:GetAttribute("InTimeTrial") or char:GetAttribute("TimeTrial") then return "Time Trial", "Time Trial" end
         if char:GetAttribute("InPortal") or char:GetAttribute("Portal") then return "Portal", "Portal" end
+        if char:GetAttribute("InInvasion") or char:GetAttribute("Invasion") then return "Invasion", "Invasion" end
     end
     return nil, nil
 end
 
-local getRaidStatus
+local function getRaidStatus()
+    local lp = game:GetService("Players").LocalPlayer
+    local inMode = lp:GetAttribute("InMode")
+    local mode = lp:GetAttribute("Mode")
+    if not (mode == "Raid" or (inMode and tostring(inMode):lower():find("raid"))) then
+        return "None", nil
+    end
+
+    local rep = game:GetService("ReplicatedStorage")
+    local gmRep = rep:FindFirstChild("Server") and rep.Server:FindFirstChild("Gamemode")
+    local room = inMode and gmRep and gmRep:FindFirstChild(inMode)
+    local status = room and room:GetAttribute("Status")
+    if status == "Running" then
+        return "Running", inMode
+    elseif status == "Opened" then
+        return "Opened", inMode
+    end
+
+    -- Fallback check: if server enemies folder has active enemies, it is Running
+    local sEnemies = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Server")
+    local gmFolder = sEnemies and sEnemies:FindFirstChild("Gamemode")
+    local rEnemies = inMode and gmFolder and gmFolder:FindFirstChild(inMode)
+    if rEnemies and #rEnemies:GetChildren() > 0 then
+        return "Running", inMode
+    end
+
+    return "Opened", inMode
+end
 
 local function isPlayerInRaid()
     local status, inMode = getRaidStatus()
@@ -448,6 +840,42 @@ local function isPlayerInPortal()
         return true, pFolder or inMode
     end
     return false, nil
+end
+
+local function isPlayerInGamemode(name)
+    local mode, inMode = getActiveGamemode()
+    if not name then
+        return (mode ~= nil), (inMode or mode)
+    end
+    local targetName = tostring(name):lower()
+    if mode and tostring(mode):lower():find(targetName) then
+        return true, inMode or mode
+    end
+    if inMode and tostring(inMode):lower():find(targetName) then
+        return true, inMode
+    end
+    local gm = workspace:FindFirstChild("_GAMEMODE")
+    if gm then
+        for _, child in ipairs(gm:GetChildren()) do
+            if child.Name:lower():find(targetName) then
+                return true, child
+            end
+        end
+    end
+    local char = getChar()
+    if char then
+        for _, attr in ipairs({"InRaid", "InTimeTrial", "InPortal", "InInvasion", "InMode", "Mode", "InGamemode"}) do
+            local val = char:GetAttribute(attr)
+            if val and tostring(val):lower():find(targetName) then
+                return true, val
+            end
+        end
+    end
+    return false, nil
+end
+
+local function isPlayerInInvasion()
+    return isPlayerInGamemode("Invasion")
 end
 
 -- RECURSIVE & ROBUST ENEMY SCANNER (Normal Maps + Gamemodes + Bosses + Nested Folders)
@@ -517,35 +945,69 @@ local function getMapEnemies(mapName)
     return list
 end
 
--- STICKY TARGET VALIDATION (Deep Search Across Server and Client)
+-- STICKY TARGET VALIDATION (Deep Search Across Server and Client with Cluster Support)
 local function isCurrentTargetStillAlive()
-    if not currentLockedTargetUID then return false end
-
     local serverEnemies = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Server")
     local clientEnemies = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Client")
     if not (serverEnemies and clientEnemies) then return false end
 
-    local sEnemy = serverEnemies:FindFirstChild(currentLockedTargetUID, true)
-    if not sEnemy then return false end
-
-    local hp = sEnemy:GetAttribute("HP") or 0
-    local dead = sEnemy:GetAttribute("Dead")
-    if hp <= 0 or dead == true then
-        return false -- Target is dead!
+    local function getAliveEnemy(uid)
+        if not uid then return nil end
+        local sObj = serverEnemies:FindFirstChild(uid, true)
+        if not sObj then return nil end
+        local hp = sObj:GetAttribute("HP") or 0
+        local dead = sObj:GetAttribute("Dead")
+        if hp <= 0 or dead == true then return nil end
+        local cObj = clientEnemies:FindFirstChild(uid)
+        local root = cObj and (cObj:FindFirstChild("HumanoidRootPart") or cObj:FindFirstChildWhichIsA("BasePart"))
+        if not root and sObj:IsA("BasePart") then root = sObj end
+        if not root then return nil end
+        return { UID = uid, Part = root, Model = cObj or sObj }
     end
 
-    local cEnemy = clientEnemies:FindFirstChild(currentLockedTargetUID)
-    local root = cEnemy and (cEnemy:FindFirstChild("HumanoidRootPart") or cEnemy:FindFirstChildWhichIsA("BasePart"))
-    if not root and sEnemy:IsA("BasePart") then
-        root = sEnemy
+    -- Clean up dead enemies from currentCoveredTargetUIDs
+    local aliveCovered = {}
+    if currentCoveredTargetUIDs and #currentCoveredTargetUIDs > 0 then
+        for _, uid in ipairs(currentCoveredTargetUIDs) do
+            if getAliveEnemy(uid) then
+                table.insert(aliveCovered, uid)
+            end
+        end
+        currentCoveredTargetUIDs = aliveCovered
     end
-    if not root then return false end
 
-    return true, currentLockedTargetUID, root, cEnemy or sEnemy
+    if currentLockedTargetUID then
+        local primary = getAliveEnemy(currentLockedTargetUID)
+        if primary then
+            if #currentCoveredTargetUIDs == 0 then
+                currentCoveredTargetUIDs = { currentLockedTargetUID }
+            end
+            return true, primary.UID, primary.Part, primary.Model
+        end
+    end
+
+    -- If primary died, check if any remaining member of cluster is alive!
+    if #currentCoveredTargetUIDs > 0 then
+        for _, uid in ipairs(currentCoveredTargetUIDs) do
+            local nextAlive = getAliveEnemy(uid)
+            if nextAlive then
+                currentLockedTargetUID = nextAlive.UID
+                if getgenv then getgenv()._CurrentLockedUID = nextAlive.UID end
+                return true, nextAlive.UID, nextAlive.Part, nextAlive.Model
+            end
+        end
+    end
+
+    currentLockedTargetUID = nil
+    currentCoveredTargetUIDs = {}
+    if getgenv then
+        getgenv()._CurrentLockedUID = nil
+        getgenv()._CurrentCoveredUIDs = {}
+    end
+    return false
 end
 
 
-local lastIndexMapTeleport = 0
 
 local AvatarData = nil
 pcall(function()
@@ -711,33 +1173,250 @@ local function getMidTierRaidTicketMonster(targetMap)
     return nil
 end
 
-getRaidStatus = function()
-    local lp = game:GetService("Players").LocalPlayer
-    local inMode = lp:GetAttribute("InMode")
-    local mode = lp:GetAttribute("Mode")
-    if not (mode == "Raid" or (inMode and tostring(inMode):lower():find("raid"))) then
-        return "None", nil
+-- ══════════════════════════════════════════════════════════
+-- COMBAT RANGE & OPTIMAL CENTROID COVERAGE ENGINE
+-- ══════════════════════════════════════════════════════════
+local lastTeleportedUID = nil
+
+local function getPlayerAttackRadius()
+    local radius = 18.0
+    pcall(function()
+        local ar = workspace:FindFirstChild("_IGNORE") and workspace._IGNORE:FindFirstChild("AttackRange")
+        if ar then
+            local hb = ar:FindFirstChild("Hitbox")
+            if hb and hb:IsA("BasePart") then
+                radius = hb.Size.X / 2
+            end
+        end
+    end)
+    -- Safe buffer of 1.2 studs so enemies near the edge are 100% within the circle hitbox
+    return math.max(8.0, radius - 1.2)
+end
+
+local floorRayParams = RaycastParams.new()
+floorRayParams.FilterType = Enum.RaycastFilterType.Include
+floorRayParams.CollisionGroup = "Default"
+
+local function getCombatFloorY(x, z, fallbackY)
+    pcall(function()
+        local mapFolder = workspace:FindFirstChild("_MAP")
+        floorRayParams.FilterDescendantsInstances = { mapFolder or workspace }
+    end)
+    local origin = Vector3.new(x, fallbackY + 12, z)
+    local result = workspace:Raycast(origin, Vector3.new(0, -45, 0), floorRayParams)
+    if result and result.Position then
+        return result.Position.Y
+    end
+    return fallbackY
+end
+
+local function findOptimalCombatCluster(enemyList)
+    if not enemyList or #enemyList == 0 then
+        return nil, nil, {}
     end
 
-    local rep = game:GetService("ReplicatedStorage")
-    local gmRep = rep:FindFirstChild("Server") and rep.Server:FindFirstChild("Gamemode")
-    local room = inMode and gmRep and gmRep:FindFirstChild(inMode)
-    local status = room and room:GetAttribute("Status")
-    if status == "Running" then
-        return "Running", inMode
-    elseif status == "Opened" then
-        return "Opened", inMode
+    local valid = {}
+    for _, e in ipairs(enemyList) do
+        if e and e.Part and e.UID and (e.HP or 0) > 0 then
+            table.insert(valid, e)
+        end
     end
 
-    -- Fallback check: if server enemies folder has active enemies, it is Running
-    local sEnemies = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Server")
-    local gmFolder = sEnemies and sEnemies:FindFirstChild("Gamemode")
-    local rEnemies = inMode and gmFolder and gmFolder:FindFirstChild(inMode)
-    if rEnemies and #rEnemies:GetChildren() > 0 then
-        return "Running", inMode
+    local count = #valid
+    if count == 0 then
+        return nil, nil, {}
     end
 
-    return "Opened", inMode
+    if count == 1 then
+        local e = valid[1]
+        local pos = e.Part.Position
+        local groundY = getCombatFloorY(pos.X, pos.Z, pos.Y)
+        return Vector3.new(pos.X, groundY + 2.5, pos.Z), e.UID, { e.UID }
+    end
+
+    -- If too many enemies, limit candidate search to nearest 30 to preserve 60+ FPS
+    local root = getRoot()
+    local playerPos = root and root.Position or Vector3.zero
+    if count > 30 then
+        table.sort(valid, function(a, b)
+            local da = (a.Part.Position - playerPos).Magnitude
+            local db = (b.Part.Position - playerPos).Magnitude
+            return da < db
+        end)
+        local trimmed = {}
+        for i = 1, 30 do table.insert(trimmed, valid[i]) end
+        valid = trimmed
+        count = #valid
+    end
+
+    local R = getPlayerAttackRadius()
+    local R2 = R * R
+
+    -- Build quick lookup for current targets to give sticky preference
+    local currentCoveredMap = {}
+    if currentCoveredTargetUIDs then
+        for _, u in ipairs(currentCoveredTargetUIDs) do
+            currentCoveredMap[u] = true
+        end
+    end
+
+    local bestCount = 0
+    local bestScore = -1e9
+    local bestCandX = valid[1].Part.Position.X
+    local bestCandZ = valid[1].Part.Position.Z
+    local bestCluster = {}
+
+    local function evaluateCand(cx, cz)
+        local covered = {}
+        local totalHP = 0
+        local hasCurrentLock = false
+
+        for i = 1, count do
+            local e = valid[i]
+            local pos = e.Part.Position
+            local dx = pos.X - cx
+            local dz = pos.Z - cz
+            if (dx * dx + dz * dz) <= R2 then
+                table.insert(covered, e)
+                totalHP = totalHP + (e.HP or 0)
+                if currentCoveredMap[e.UID] or (currentLockedTargetUID and e.UID == currentLockedTargetUID) then
+                    hasCurrentLock = true
+                end
+            end
+        end
+
+        local num = #covered
+        if num == 0 then return end
+
+        local distP = math.sqrt((cx - playerPos.X)^2 + (cz - playerPos.Z)^2)
+        -- Scoring priority:
+        -- 1. Number of enemies inside circle (1,000,000 pts each) -> e.g. 4 > 3 > 2 > 1
+        -- 2. Sticky lock bonus (+800,000 pts) -> finish current group before switching away
+        -- 3. Distance penalty -> prefer closest cluster
+        -- 4. HP penalty -> prefer lower HP group
+        local score = (num * 1000000)
+            + (hasCurrentLock and 800000 or 0)
+            - (distP * 10)
+            - (totalHP * 0.001)
+
+        if score > bestScore then
+            bestScore = score
+            bestCount = num
+            bestCandX = cx
+            bestCandZ = cz
+            bestCluster = covered
+        end
+    end
+
+    -- 1. Test single enemy positions
+    for i = 1, count do
+        local p = valid[i].Part.Position
+        evaluateCand(p.X, p.Z)
+    end
+
+    -- 2. Test 2-point circumcircles (intersection of two circles of radius R)
+    local doubleR = 2 * R
+    for i = 1, count do
+        local p1 = valid[i].Part.Position
+        for j = i + 1, count do
+            local p2 = valid[j].Part.Position
+            local dx = p2.X - p1.X
+            local dz = p2.Z - p1.Z
+            local d = math.sqrt(dx * dx + dz * dz)
+            if d <= doubleR and d > 0.05 then
+                local mx = (p1.X + p2.X) * 0.5
+                local mz = (p1.Z + p2.Z) * 0.5
+                local h = math.sqrt(math.max(0, R2 - (d * 0.5) * (d * 0.5)))
+                local ux = -dz / d
+                local uz = dx / d
+                evaluateCand(mx, mz)
+                evaluateCand(mx + h * ux, mz + h * uz)
+                evaluateCand(mx - h * ux, mz - h * uz)
+            end
+        end
+    end
+
+    if #bestCluster == 0 then
+        local e = valid[1]
+        local pos = e.Part.Position
+        local gy = getCombatFloorY(pos.X, pos.Z, pos.Y)
+        return Vector3.new(pos.X, gy + 2.5, pos.Z), e.UID, { e.UID }
+    end
+
+    -- 3. Centroid calculation: center of mass of covered enemies
+    local sumX, sumY, sumZ = 0, 0, 0
+    local coveredUIDs = {}
+    local primaryUID = bestCluster[1].UID
+
+    for _, e in ipairs(bestCluster) do
+        local pos = e.Part.Position
+        sumX = sumX + pos.X
+        sumY = sumY + pos.Y
+        sumZ = sumZ + pos.Z
+        table.insert(coveredUIDs, e.UID)
+        if currentLockedTargetUID and e.UID == currentLockedTargetUID then
+            primaryUID = e.UID
+        end
+    end
+
+    local numBest = #bestCluster
+    local cX = sumX / numBest
+    local cY = sumY / numBest
+    local cZ = sumZ / numBest
+
+    -- If all enemies in the cluster fit inside radius R from the centroid,
+    -- the centroid places the player perfectly in the center between all mobs!
+    local isCentroidEnclosed = true
+    for _, e in ipairs(bestCluster) do
+        local pos = e.Part.Position
+        local dx = pos.X - cX
+        local dz = pos.Z - cZ
+        if (dx * dx + dz * dz) > R2 then
+            isCentroidEnclosed = false
+            break
+        end
+    end
+
+    local finalX = isCentroidEnclosed and cX or bestCandX
+    local finalZ = isCentroidEnclosed and cZ or bestCandZ
+    local floorY = getCombatFloorY(finalX, finalZ, cY)
+    local optPos = Vector3.new(finalX, floorY + 2.5, finalZ)
+
+    return optPos, primaryUID, coveredUIDs
+end
+
+local function teleportToCombat(targetPos, coveredUIDs, primaryUID)
+    local root = getRoot()
+    if not (targetPos and root) then return end
+
+    currentLockedTargetUID = primaryUID
+    currentCoveredTargetUIDs = (coveredUIDs and #coveredUIDs > 0) and coveredUIDs or { primaryUID }
+    if getgenv then
+        getgenv()._CurrentLockedUID = primaryUID
+        getgenv()._CurrentCoveredUIDs = currentCoveredTargetUIDs
+    end
+
+    -- Keep game's attack zone targets synchronized
+    Library.Target = currentCoveredTargetUIDs
+
+    local currentDist = (root.Position - targetPos).Magnitude
+    local targetChanged = (primaryUID ~= lastTeleportedUID)
+
+    if targetChanged or currentDist > 3.0 then
+        lastTeleportedUID = primaryUID
+        TIMERS.lastTeleportTick = os.clock()
+        root.CFrame = CFrame.new(targetPos)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function teleportToTarget(part, uid)
+    if not (part and uid) then return end
+    local pos = part.Position
+    local floorY = getCombatFloorY(pos.X, pos.Z, pos.Y)
+    local combatPos = Vector3.new(pos.X, floorY + 2.5, pos.Z)
+    teleportToCombat(combatPos, { uid }, uid)
 end
 
 local function selectTargetEnemy()
@@ -749,9 +1428,10 @@ local function selectTargetEnemy()
 
         -- If target map is specified and we are not in that map, WARP IMMEDIATELY!
         if targetIndexMap and targetIndexMap ~= "Current Map" and curMap ~= targetIndexMap then
-            if tick() - lastIndexMapTeleport >= 2.0 then
-                lastIndexMapTeleport = tick()
+            if os.clock() - TIMERS.lastIndexMapTeleport >= 2.0 then
+                TIMERS.lastIndexMapTeleport = os.clock()
                 currentLockedTargetUID = nil
+                currentCoveredTargetUIDs = {}
                 pcall(function()
                     Library.Remote:Fire("TeleportSystem", "To", targetIndexMap)
                 end)
@@ -774,7 +1454,7 @@ local function selectTargetEnemy()
                     for monsterNameLower, avId in pairs(missingAvatars) do
                         if sName == monsterNameLower or sName:find(monsterNameLower) or monsterNameLower:find(sName) then
                             if getgenv then getgenv()._CurrentLockedUID = lUID end
-                            return lUID, lPart, lModel
+                            return lUID, lPart, lModel, nil, currentCoveredTargetUIDs
                         end
                     end
                 end
@@ -789,14 +1469,31 @@ local function selectTargetEnemy()
                 targetEnemies = getMapEnemies("All")
             end
 
+            local matchingEnemies = {}
             for _, e in ipairs(targetEnemies) do
                 local eNameLower = e.Name:lower()
                 for monsterNameLower, avId in pairs(missingAvatars) do
                     if eNameLower == monsterNameLower or eNameLower:find(monsterNameLower) or monsterNameLower:find(eNameLower) then
-                        currentLockedTargetUID = e.UID
-                        if getgenv then getgenv()._CurrentLockedUID = currentLockedTargetUID end
-                        return e.UID, e.Part, e.Model
+                        table.insert(matchingEnemies, e)
+                        break
                     end
+                end
+            end
+
+            if #matchingEnemies > 0 then
+                local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(matchingEnemies)
+                if optPos and primaryUID then
+                    local chosen = matchingEnemies[1]
+                    for _, e in ipairs(matchingEnemies) do
+                        if e.UID == primaryUID then chosen = e break end
+                    end
+                    currentLockedTargetUID = primaryUID
+                    currentCoveredTargetUIDs = coveredUIDs
+                    if getgenv then
+                        getgenv()._CurrentLockedUID = primaryUID
+                        getgenv()._CurrentCoveredUIDs = coveredUIDs
+                    end
+                    return primaryUID, chosen.Part, chosen.Model, optPos, coveredUIDs
                 end
             end
         end
@@ -813,9 +1510,10 @@ local function selectTargetEnemy()
                 local mName = lockedModel:GetAttribute("Name") or lockedModel.Name
                 if isRaidTicketDropper(mName, raidMap) then
                     if getgenv then getgenv()._CurrentLockedUID = lockedUID end
-                    return lockedUID, lockedPart, lockedModel
+                    return lockedUID, lockedPart, lockedModel, nil, currentCoveredTargetUIDs
                 else
                     currentLockedTargetUID = nil -- Drop the lock on non-ticket mob
+                    currentCoveredTargetUIDs = {}
                 end
             end
 
@@ -823,14 +1521,16 @@ local function selectTargetEnemy()
             local subBoss = getMidTierRaidTicketMonster(raidMap)
             if subBoss then
                 currentLockedTargetUID = subBoss.UID
+                currentCoveredTargetUIDs = { subBoss.UID }
                 if getgenv then getgenv()._CurrentLockedUID = currentLockedTargetUID end
-                return subBoss.UID, subBoss.Part, subBoss.Model
+                return subBoss.UID, subBoss.Part, subBoss.Model, nil, currentCoveredTargetUIDs
             end
 
             -- If ticket sub-boss is temporarily dead, DO NOT FALL THROUGH to weak mobs!
             currentLockedTargetUID = nil
+            currentCoveredTargetUIDs = {}
             if getgenv then getgenv()._CurrentLockedUID = nil end
-            return nil, nil, nil
+            return nil, nil, nil, nil, {}
         end
     end
 
@@ -838,11 +1538,12 @@ local function selectTargetEnemy()
     local stillAlive, lockedUID, lockedPart, lockedModel = isCurrentTargetStillAlive()
     if stillAlive then
         if getgenv then getgenv()._CurrentLockedUID = lockedUID end
-        return lockedUID, lockedPart, lockedModel
+        return lockedUID, lockedPart, lockedModel, nil, currentCoveredTargetUIDs
     end
 
     -- Target died or no target locked: unlock and find NEW target
     currentLockedTargetUID = nil
+    currentCoveredTargetUIDs = {}
     if getgenv then getgenv()._CurrentLockedUID = nil end
 
     -- 2. GAMEMODE TARGETS (Raid / Time Trial / Portal / InMode Events)
@@ -858,10 +1559,20 @@ local function selectTargetEnemy()
         end
 
         if #gmEnemies > 0 then
-            table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
-            currentLockedTargetUID = gmEnemies[1].UID
-            if getgenv then getgenv()._CurrentLockedUID = currentLockedTargetUID end
-            return gmEnemies[1].UID, gmEnemies[1].Part, gmEnemies[1].Model
+            local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(gmEnemies)
+            if optPos and primaryUID then
+                local chosen = gmEnemies[1]
+                for _, e in ipairs(gmEnemies) do
+                    if e.UID == primaryUID then chosen = e break end
+                end
+                currentLockedTargetUID = primaryUID
+                currentCoveredTargetUIDs = coveredUIDs
+                if getgenv then
+                    getgenv()._CurrentLockedUID = primaryUID
+                    getgenv()._CurrentCoveredUIDs = coveredUIDs
+                end
+                return primaryUID, chosen.Part, chosen.Model, optPos, coveredUIDs
+            end
         end
     end
 
@@ -870,16 +1581,14 @@ local function selectTargetEnemy()
     local highestUnlocked = getHighestUnlockedMap()
     local targetMap = curMap
 
--- (Raid Ticket Farming handled at Priority 0.5 above)
-
     -- Check if we have a pending unlock that needs gold!
     local pd = Library and Library.PlayerData
     local playerGold = pd and (pd.Gold or (pd.Items and pd.Items.Gold) or 0) or 0
     if currentPendingUnlock and playerGold < currentPendingUnlock.Cost then
         -- Farm gold in the target map or highest unlocked map
         targetMap = currentPendingUnlock.Map or highestUnlocked
-        if curMap ~= targetMap and (os.clock() - lastNewAreaTeleport >= 3.0) then
-            lastNewAreaTeleport = os.clock()
+        if curMap ~= targetMap and (os.clock() - TIMERS.lastNewAreaTeleport >= 3.0) then
+            TIMERS.lastNewAreaTeleport = os.clock()
             pcall(function()
                 Library.Remote:Fire("TeleportSystem", "To", targetMap)
             end)
@@ -887,8 +1596,8 @@ local function selectTargetEnemy()
     elseif CFG.AutoGoNewArea and highestUnlocked and highestUnlocked ~= "Lobby" then
         targetMap = highestUnlocked
         -- Proactively travel to the latest unlocked map if not already there!
-        if curMap ~= highestUnlocked and (os.clock() - lastNewAreaTeleport >= 3.0) then
-            lastNewAreaTeleport = os.clock()
+        if curMap ~= highestUnlocked and (os.clock() - TIMERS.lastNewAreaTeleport >= 3.0) then
+            TIMERS.lastNewAreaTeleport = os.clock()
             pcall(function()
                 Library.Remote:Fire("TeleportSystem", "To", highestUnlocked)
             end)
@@ -913,7 +1622,7 @@ local function selectTargetEnemy()
         -- Final fallback: scan any alive monster in the server
         enemies = getMapEnemies("All")
     end
-    if #enemies == 0 then return nil, nil, nil end
+    if #enemies == 0 then return nil, nil, nil, nil, {} end
 
     -- 2. Filter by monster multi-selection (Matches both raw name and [ Map ] suffix)
     local selectedMonsters = CFG.TargetMonsterFilterMulti or (CFG.TargetMonsterFilter and { CFG.TargetMonsterFilter }) or {"All"}
@@ -930,96 +1639,70 @@ local function selectTargetEnemy()
             end
         end
         if #filtered > 0 then
-            table.sort(filtered, function(a, b) return a.HP < b.HP end)
-            currentLockedTargetUID = filtered[1].UID
-            if getgenv then getgenv()._CurrentLockedUID = currentLockedTargetUID end
-            return filtered[1].UID, filtered[1].Part, filtered[1].Model
-        end
-    end
-
-    -- Normal sorting
-    if not CFG.AutoGoNewArea then
-        table.sort(enemies, function(a, b) return a.HP > b.HP end)
-    else
-        table.sort(enemies, function(a, b) return a.HP < b.HP end)
-    end
-
-    currentLockedTargetUID = enemies[1].UID
-    if getgenv then getgenv()._CurrentLockedUID = currentLockedTargetUID end
-    return enemies[1].UID, enemies[1].Part, enemies[1].Model
-end
-
-local lastTeleportedUID = nil
-local lastTeleportTick = 0
-
--- Smart AOE Centroid calculation: finds nearby enemies to maximize skill hitbox coverage
-local function getSmartAoeTargetPosition(part)
-    local pPos = part.Position
-    local serverEnemies = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Server")
-    if not serverEnemies then return pPos end
-
-    local sumPos = pPos
-    local clusterCount = 1
-    local aoeRadius = 25.0
-
-    for _, obj in ipairs(serverEnemies:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name:find("Root") or obj.Name == "HumanoidRootPart") then
-            local dist = (obj.Position - pPos).Magnitude
-            if dist > 0.5 and dist <= aoeRadius then
-                sumPos = sumPos + obj.Position
-                clusterCount = clusterCount + 1
+            local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(filtered)
+            if optPos and primaryUID then
+                local chosen = filtered[1]
+                for _, e in ipairs(filtered) do
+                    if e.UID == primaryUID then chosen = e break end
+                end
+                currentLockedTargetUID = primaryUID
+                currentCoveredTargetUIDs = coveredUIDs
+                if getgenv then
+                    getgenv()._CurrentLockedUID = primaryUID
+                    getgenv()._CurrentCoveredUIDs = coveredUIDs
+                end
+                return primaryUID, chosen.Part, chosen.Model, optPos, coveredUIDs
             end
         end
     end
 
-    return sumPos / clusterCount
-end
+    local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(enemies)
+    if optPos and primaryUID then
+        local chosen = enemies[1]
+        for _, e in ipairs(enemies) do
+            if e.UID == primaryUID then chosen = e break end
+        end
+        currentLockedTargetUID = primaryUID
+        currentCoveredTargetUIDs = coveredUIDs
+        if getgenv then
+            getgenv()._CurrentLockedUID = primaryUID
+            getgenv()._CurrentCoveredUIDs = coveredUIDs
+        end
+        return primaryUID, chosen.Part, chosen.Model, optPos, coveredUIDs
+    end
 
+    currentLockedTargetUID = enemies[1].UID
+    currentCoveredTargetUIDs = { enemies[1].UID }
+    if getgenv then
+        getgenv()._CurrentLockedUID = currentLockedTargetUID
+        getgenv()._CurrentCoveredUIDs = currentCoveredTargetUIDs
+    end
+    return enemies[1].UID, enemies[1].Part, enemies[1].Model, nil, { enemies[1].UID }
+end
 
 local function setupDashListener()
-    local function hookRoot(c)
-        local r = c:WaitForChild("HumanoidRootPart", 5)
-        if r then
-            r.ChildAdded:Connect(function(child)
-                if CFG.DashHack and (child:IsA("LinearVelocity") or child:IsA("BodyVelocity")) then
-                    local hum = getHum()
-                    local dir = (hum and hum.MoveDirection.Magnitude > 0) and hum.MoveDirection or r.CFrame.LookVector
-                    if child:IsA("LinearVelocity") then
-                        child.VectorVelocity = dir * (CFG.DashSpeed or 150)
-                    elseif child:IsA("BodyVelocity") then
-                        child.Velocity = dir * (CFG.DashSpeed or 150)
-                        child.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-                    end
-                end
-            end)
-        end
+    local function track(connection)
+        table.insert(_G.AnimeBreaker_Connections, connection)
+    end
+    local function hookRoot(character)
+        local root = character:WaitForChild("HumanoidRootPart", 5)
+        if not root then return end
+        track(root.ChildAdded:Connect(function(child)
+            if not CFG.DashHack then return end
+            local hum = getHum()
+            local direction = (hum and hum.MoveDirection.Magnitude > 0) and hum.MoveDirection or root.CFrame.LookVector
+            if child:IsA("LinearVelocity") then
+                child.VectorVelocity = direction * (CFG.DashSpeed or 150)
+            elseif child:IsA("BodyVelocity") then
+                child.Velocity = direction * (CFG.DashSpeed or 150)
+                child.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+            end
+        end))
     end
     if lp.Character then hookRoot(lp.Character) end
-    lp.CharacterAdded:Connect(hookRoot)
+    track(lp.CharacterAdded:Connect(hookRoot))
 end
 task.spawn(setupDashListener)
-
-local function teleportToTarget(part, uid)
-    local root = getRoot()
-    if not (part and root) then return end
-
-    local smartCenter = getSmartAoeTargetPosition(part)
-    local targetPos = smartCenter + Vector3.new(0, 2.5, 3)
-    local dist = (root.Position - smartCenter).Magnitude
-
-    -- If target changed OR player is far away, immediately TP
-    if uid ~= lastTeleportedUID or dist > 4.5 or dist < 1.5 then
-        lastTeleportedUID = uid
-        lastTeleportTick = tick()
-        root.CFrame = CFrame.lookAt(targetPos, smartCenter)
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end
-
-    if uid then
-        Library.Target = { uid }
-    end
-end
 
 -- WALL BREAKING, QUESTS, UNLOCKS & MODES
 -- ══════════════════════════════════════════════════════════
@@ -1074,8 +1757,8 @@ local function handleSmartWallBreaking(now)
 
     -- 1. If we are not in the latest unlocked area, warp to latest area first!
     if highestUnlocked and highestUnlocked ~= "Lobby" and highestUnlocked ~= curMap then
-        if now - lastNewAreaTeleport >= 2.0 then
-            lastNewAreaTeleport = now
+        if now - TIMERS.lastNewAreaTeleport >= 2.0 then
+            TIMERS.lastNewAreaTeleport = now
             pcall(function()
                 Library.Remote:Fire("TeleportSystem", "To", highestUnlocked)
             end)
@@ -1087,8 +1770,8 @@ local function handleSmartWallBreaking(now)
     if isNextMapUnlocked(curMap) then
         local nextHighest = getHighestUnlockedMap()
         if nextHighest and nextHighest ~= "Lobby" and nextHighest ~= curMap then
-            if now - lastNewAreaTeleport >= 2.0 then
-                lastNewAreaTeleport = now
+            if now - TIMERS.lastNewAreaTeleport >= 2.0 then
+                TIMERS.lastNewAreaTeleport = now
                 pcall(function()
                     Library.Remote:Fire("TeleportSystem", "To", nextHighest)
                 end)
@@ -1163,14 +1846,45 @@ local function cleanupDuplicateCards()
     end
 end
 
-local lastQuestGachaSpin = 0
-local lastQuestConsumableUse = 0
 
-local lastSummonTick = 0
+
+
+local function shouldStopSummon(pd)
+    local target = CFG.SummonStopRarity or "Any"
+    if target == "Any" then return false end
+    local reqRank = parseTargetRank(target)
+    if reqRank <= 0 then return false end
+    local summonType = CFG.SummonType or "Pet"
+
+    if summonType == "Race" then
+        return checkGachaStopCondition("Race", target)
+    elseif summonType == "Eye Technique" then
+        return checkGachaStopCondition("Eye Technique", target)
+    else
+        local catKey = summonType .. "s"
+        local inventory = pd and (pd[catKey] or pd[summonType] or pd.Pets or pd.Cards)
+        if type(inventory) == "table" then
+            for uid, item in pairs(inventory) do
+                local itemId = (type(item) == "table" and (item.Id or uid)) or uid
+                local rName, rOrder = getItemRarity(itemId)
+                if rOrder >= reqRank then
+                    return true, itemId, rName, rOrder
+                end
+            end
+        end
+    end
+    return false
+end
 
 local function doAutoSummon()
     local pd = Library and Library.PlayerData
     if not (pd and Library.Remote) then return end
+
+    local shouldStop, itemId, rName = shouldStopSummon(pd)
+    if shouldStop then
+        stopSpinToggle("AutoSummon", "Card/Pet Summon", itemId, rName)
+        return
+    end
 
     local eggMap = CFG.SummonEgg or getCurrentMap()
     if eggMap == "Lobby" or not eggMap or eggMap == "" then eggMap = "DBZ" end
@@ -1193,8 +1907,8 @@ end
 
 local function handleAutoQuests(now)
     if not (CFG.AutoQuest or CFG.AutoQuests) then return end
-    if now - lastQuestTick < 1.0 then return end
-    lastQuestTick = now
+    if now - TIMERS.lastQuestTick < 1.0 then return end
+    TIMERS.lastQuestTick = now
 
     local pd = Library and Library.PlayerData
     if not (pd and Library.Remote) then return end
@@ -1225,8 +1939,8 @@ local function handleAutoQuests(now)
                         if prog < goal then
                             -- Gacha / Card Spin Quest
                             if oType == "SpinGacha" or oType:find("Gacha") or oType:find("Card") then
-                                if now - lastQuestGachaSpin >= 0.5 then
-                                    lastQuestGachaSpin = now
+                                if now - TIMERS.lastQuestGachaSpin >= 0.5 then
+                                    TIMERS.lastQuestGachaSpin = now
                                     local curMap = getCurrentMap()
                                     if curMap == "Lobby" or not curMap or curMap == "" then curMap = "DBZ" end
                                     pcall(function()
@@ -1235,8 +1949,8 @@ local function handleAutoQuests(now)
                                 end
                             -- Consumable Quests (e.g. "Use Consumable")
                             elseif oType == "UseConsumable" or oType:find("Consumable") then
-                                if now - lastQuestConsumableUse >= 0.5 then
-                                    lastQuestConsumableUse = now
+                                if now - TIMERS.lastQuestConsumableUse >= 0.5 then
+                                    TIMERS.lastQuestConsumableUse = now
                                     if pd.Items then
                                         for itemId, count in pairs(pd.Items) do
                                             if count > 0 and (itemId:find("Potion") or itemId:find("Juice")) then
@@ -1274,111 +1988,74 @@ local function handleAutoQuests(now)
     end
 end
 
+local currentPendingUnlock = nil
+
+local UNLOCK_SYSTEMS_CONFIG = {
+    { Id = "Gacha_Race",                 Name = "Race",              Map = "DBZ",          Cost = 10000,                  SettingKey = "AutoUnlockRace",           CostStr = "10k Gold" },
+    { Id = "Upgrade_Warrior Upgrades",   Name = "Warrior Upgrades",  Map = "DBZ",          Cost = 15000,                  SettingKey = "AutoUnlockWarrior",        CostStr = "15k Gold" },
+    { Id = "Upgrade_Offline Upgrades",   Name = "Offline Upgrades",  Map = "DBZ",          Cost = 45000,                  SettingKey = "AutoUnlockOffline",        CostStr = "45k Gold" },
+    { Id = "Gacha_Titan",                Name = "Titan",             Map = "AOT",          Cost = 10000000,               SettingKey = "AutoUnlockTitan",          CostStr = "10M Gold" },
+    { Id = "Gacha_Weapon_T1",            Name = "Weapon T1",         Map = "AOT",          Cost = 10935000,               SettingKey = "AutoUnlockWeapon",         CostStr = "10.93M Gold" },
+    { Id = "Gacha_Hero Passive",         Name = "Hero Passive",      Map = "AOT",          Cost = 87480000,               SettingKey = "AutoUnlockHeroPassive",    CostStr = "87.48M Gold" },
+    { Id = "Gacha_Eye Technique",        Name = "Eye Technique",     Map = "Naruto",       Cost = 2361960000,             SettingKey = "AutoUnlockEye",            CostStr = "2.36B Gold" },
+    { Id = "Upgrade_Ninja Progression",  Name = "Ninja Progression", Map = "Naruto",       Cost = 3542940000,             SettingKey = "AutoUnlockNinja",          CostStr = "3.54B Gold" },
+    { Id = "Upgrade_Red Cloud Totem",    Name = "Red Cloud Totem",   Map = "Naruto",       Cost = 10628820000,            SettingKey = "AutoUnlockRedCloud",       CostStr = "10.6B Gold" },
+    { Id = "Gacha_Sin",                  Name = "Sin",               Map = "Nanatsu",      Cost = 5165606520000,          SettingKey = "AutoUnlockSin",            CostStr = "5.16T Gold" },
+    { Id = "Gacha_Amulet Building",      Name = "Amulet Building",   Map = "Nanatsu",      Cost = 20662426080000,         SettingKey = "AutoUnlockAmulet",         CostStr = "20.6T Gold" },
+    { Id = "Upgrade_Commandment Totem",  Name = "Commandment Totem", Map = "Nanatsu",      Cost = 41324852160000,         SettingKey = "AutoUnlockCommandment",    CostStr = "41.3T Gold" },
+    { Id = "Gacha_Hunter Rank",          Name = "Hunter Rank",       Map = "SoloLeveling", Cost = 135566177510880000,     SettingKey = "AutoUnlockHunter",         CostStr = "135.5Qn Gold" },
+    { Id = "Upgrade_Portal Upgrades",    Name = "Portal Upgrades",   Map = "SoloLeveling", Cost = 271132355021760000,     SettingKey = "AutoUnlockPortal",         CostStr = "271.1Qn Gold" },
+    { Id = "Gacha_Shadow Passive",       Name = "Shadow Passive",    Map = "SoloLeveling", Cost = 542264710043520000,     SettingKey = "AutoUnlockShadow",         CostStr = "542.2Qn Gold" },
+    { Id = "Upgrade_Ant Progression",    Name = "Ant Progression",   Map = "SoloLeveling", Cost = 813397065065280000,     SettingKey = "AutoUnlockAnt",            CostStr = "813.3Qn Gold" },
+    { Id = "Upgrade_Class Tree",         Name = "Class Tree",        Map = "SoloLeveling", Cost = 1084529420087000000,    SettingKey = "AutoUnlockClassTree",      CostStr = "1.08Sx Gold" },
+    { Id = "Gacha_Weapon Passive",       Name = "Weapon Passive",    Map = "OnePiece",     Cost = 26028706082088960000,   SettingKey = "AutoUnlockWeaponPassive",  CostStr = "26.0Sx Gold" },
+    { Id = "Gacha_Haki",                 Name = "Haki",              Map = "OnePiece",     Cost = 65885162270288000000,   SettingKey = "AutoUnlockHaki",           CostStr = "65.8Sx Gold" },
+}
+
 local function doAutoQuests()
     local prior = CFG.AutoQuests
     CFG.AutoQuests = true
-    lastQuestTick = 0
-    local ok, reason = pcall(handleAutoQuests, tick())
+    TIMERS.lastQuestTick = 0
+    local ok, reason = pcall(handleAutoQuests, os.clock())
     CFG.AutoQuests = prior
     if not ok then warn("[Axel Hub Quests] " .. tostring(reason)) end
 end
 
-local currentPendingUnlock = nil
-
-local UNLOCK_SYSTEMS_CONFIG = {
-    { Id = "Gacha_Race",                 Name = "Race Gacha",           Map = "DBZ",  Cost = 10000,       SettingKey = "AutoUnlockRace" },
-    { Id = "Upgrade_Warrior Upgrades",    Name = "Warrior Upgrades",     Map = "DBZ",  Cost = 15000,       SettingKey = "AutoUnlockWarrior" },
-    { Id = "Upgrade_Offline Upgrades",    Name = "Offline Upgrades",     Map = "DBZ",  Cost = 45000,       SettingKey = "AutoUnlockOffline" },
-    { Id = "Gacha_Titan",                Name = "Titan Gacha",          Map = "AOT",  Cost = 4860000,     SettingKey = "AutoUnlockTitan" },
-    { Id = "Gacha_Weapon_T1",            Name = "Weapon T1 Gacha",      Map = "AOT",  Cost = 10935000,    SettingKey = "AutoUnlockWeapon" },
-    { Id = "Gacha_Hero Passive",         Name = "Hero Passive Gacha",   Map = "AOT",  Cost = 87480000,    SettingKey = "AutoUnlockHeroPassive" },
-    { Id = "Gacha_Eye Technique",        Name = "Eye Technique Gacha",  Map = "Naruto", Cost = 2361960000, SettingKey = "AutoUnlockEye" },
-    { Id = "Upgrade_Ninja Progression",   Name = "Ninja Progression",    Map = "Naruto", Cost = 3542940000, SettingKey = "AutoUnlockNinja" },
-    { Id = "Upgrade_Red Cloud Totem",     Name = "Red Cloud Totem",      Map = "Naruto", Cost = 10628820000, SettingKey = "AutoUnlockRedCloud" },
-    { Id = "Gacha_Sin",                  Name = "Sin Gacha",            Map = "Nanatsu", Cost = 5165606520000, SettingKey = "AutoUnlockSin" },
-    { Id = "Gacha_Amulet Building",      Name = "Amulet Building",      Map = "Nanatsu", Cost = 20662426080000, SettingKey = "AutoUnlockAmulet" },
-    { Id = "Upgrade_Commandment Totem",   Name = "Commandment Totem",    Map = "Nanatsu", Cost = 41324852160000, SettingKey = "AutoUnlockCommandment" },
-    { Id = "Gacha_Hunter Rank",          Name = "Hunter Rank Gacha",    Map = "SoloLeveling", Cost = 135566177510880000, SettingKey = "AutoUnlockHunter" },
-    { Id = "Upgrade_Portal Upgrades",     Name = "Portal Upgrades",      Map = "SoloLeveling", Cost = 271132355021760000, SettingKey = "AutoUnlockPortal" },
-    { Id = "Gacha_Shadow Passive",       Name = "Shadow Passive Gacha", Map = "SoloLeveling", Cost = 542264710043520000, SettingKey = "AutoUnlockShadow" },
-    { Id = "Upgrade_Ant Progression",     Name = "Ant Progression",      Map = "SoloLeveling", Cost = 813397065065280000, SettingKey = "AutoUnlockAnt" },
-    { Id = "Upgrade_Class Tree",         Name = "Class Tree",          Map = "SoloLeveling", Cost = 1084529420087000000, SettingKey = "AutoUnlockClassTree" },
-}
-
-local function getNextUnlockTarget()
-    local pd = Library and Library.PlayerData
-    if not pd then return nil end
-    local unlocked = pd.Unlocked or {}
-    local unlockedMaps = pd.UnlockedMap or {}
-
-    for _, sys in ipairs(UNLOCK_SYSTEMS_CONFIG) do
-        local isEnabled = CFG[sys.SettingKey] or CFG.BalancedUnlocker
-        if isEnabled and not unlocked[sys.Id] and (unlockedMaps[sys.Map] == true or sys.Map == "DBZ") then
-            return sys
-        end
-    end
-    return nil
-end
-
-local function handleBalancedUnlocks(now)
-    if now - lastUnlockStep < 1.0 then return end
-    lastUnlockStep = now
+local function handleIndividualSystemUnlocks(now)
+    if now - TIMERS.lastUnlockStep < 0.75 then return end
+    TIMERS.lastUnlockStep = now
 
     local pd = Library and Library.PlayerData
     if not (pd and Library.Remote) then return end
-
-    -- Unlock only when player has enough gold/currency. NEVER overrides farming target!
-    currentPendingUnlock = nil
-
-    local target = getNextUnlockTarget()
-    if target then
-        local playerGold = pd.Gold or (pd.Items and pd.Items.Gold) or 0
-        if playerGold >= target.Cost then
-            pcall(function()
-                Library.Remote:Fire("UnlockSystem", "Validate", target.Id)
-            end)
-        end
-    end
-
-    -- Auto Unlock Titan
-    if CFG.AutoUnlockTitan and not (pd.Unlocked and pd.Unlocked["Gacha_Titan"]) then
-        local playerGold = pd.Gold or (pd.Items and pd.Items.Gold) or 0
-        if playerGold >= 10000000 then -- 10M Gold
-            pcall(function()
-                Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Titan")
-            end)
-        end
-    end
-end
-
-local function handleAutoUnlockSystems()
-    local pd = Library and Library.PlayerData
-    if not pd then return end
-    local items = pd.Items or {}
     local unlocked = pd.Unlocked or {}
+    local playerGold = pd.Gold or (pd.Items and pd.Items.Gold) or 0
+    local unlockedMaps = pd.UnlockedMap or {}
 
-    local ud = nil
-    pcall(function() ud = Library:GetData("UnlockData") end)
-    if not ud then return end
-
-    for unlockId, info in pairs(ud) do
-        if not unlocked[unlockId] then
-            local reqs = info.Requirements or {}
-            local canAfford = true
-            for curName, reqAmt in pairs(reqs) do
-                if (items[curName] or 0) < reqAmt then
-                    canAfford = false
-                    break
+    for _, sys in ipairs(UNLOCK_SYSTEMS_CONFIG) do
+        if CFG[sys.SettingKey] and not unlocked[sys.Id] then
+            if unlockedMaps[sys.Map] == true or sys.Map == "DBZ" or getCurrentMap() == sys.Map then
+                if playerGold >= sys.Cost then
+                    pcall(function()
+                        Library.Remote:Fire("UnlockSystem", "Validate", sys.Id)
+                    end)
                 end
             end
-            if canAfford then
-                Library.Remote:Fire("UnlockSystem", "Validate", unlockId)
-            end
         end
     end
 end
 
-local lastGamemodeExitAttempt = 0
+-- Hook Character Spawn & Map Change to check enabled system unlocks
+pcall(function()
+    table.insert(_G.AnimeBreaker_Connections, lp.CharacterAdded:Connect(function()
+        task.wait(1.5)
+        pcall(function() handleIndividualSystemUnlocks(os.clock()) end)
+    end))
+    table.insert(_G.AnimeBreaker_Connections, lp:GetAttributeChangedSignal("Map"):Connect(function()
+        task.wait(1.5)
+        pcall(function() handleIndividualSystemUnlocks(os.clock()) end)
+    end))
+end)
+
 
 local function getCurrentGamemodeStage()
     local lp = game:GetService("Players").LocalPlayer
@@ -1432,7 +2109,6 @@ local function executeGamemodeQuit()
     end)
 end
 
-local lastTimeTrialJoinAttempt = 0
 
 local function getGamemodeEnemies()
     local list = {}
@@ -1516,133 +2192,128 @@ local function doJoinTimeTrial(diff)
     end)
 end
 
-
-local ttExitedDiffCooldown = {} -- Tracks completed difficulty cooldowns { [diff] = expiryTimestamp }
-local ttCurrentActiveDiff = nil -- Currently running difficulty
+local ttCurrentActiveDiff = nil
 local ttHasJoinedOnce = false
+local ttWasInsideLast = false
+local ttLastJoinOpensAt = nil  -- OpensAt ของ window ที่ join ไปแล้ว (ป้องกัน join ซ้ำใน window เดิม)
 
-local function getSelectedTTDifficulties()
+local function getSelectedTTDiffs()
     local diffs = CFG.TTDifficulties or CFG.TTDifficulty
-    if type(diffs) == "string" then
-        return { diffs }
-    elseif type(diffs) == "table" then
+    if type(diffs) == "string" and diffs ~= "" then return { diffs } end
+    if type(diffs) == "table" then
         local list = {}
         for _, d in pairs(diffs) do
-            if type(d) == "string" and d ~= "" then
-                table.insert(list, d)
-            end
+            if type(d) == "string" and d ~= "" then table.insert(list, d) end
         end
         return #list > 0 and list or { "Easy" }
     end
     return { "Easy" }
 end
 
-local function getAvailableTimeTrialDiff()
+-- เช็ค window.Open == true สำหรับทุก difficulty ที่เลือก → คืนค่า diff + OpensAt
+local function getTTOpenWindow()
     local gms = Library and Library.GamemodeService
+    if not (gms and gms.GetWindow) then return nil, nil end
+
     local pd = Library and Library.PlayerData
-    local selected = getSelectedTTDifficulties()
-    local nowTick = tick()
+    local nowTick = os.clock()
 
-    -- Check each selected difficulty to find which one is currently OPEN & NOT on exit cooldown
-    for _, diff in ipairs(selected) do
-        -- 1. Check local session cooldown for this specific difficulty (Never re-enter until cooldown expires or new window)
-        local exitCd = ttExitedDiffCooldown[diff]
-        local isLocalCooldown = exitCd and (nowTick < exitCd)
-
-        if not isLocalCooldown then
-            local isOpen = true
-            local timeLeft = 0
-            if gms and gms.GetWindow then
-                local success, win = pcall(function()
-                    return gms.GetWindow("Time Trial", "The Hallway", diff)
-                end)
-                if success and win then
-                    isOpen = win.Open == true
-                    timeLeft = win.TimeLeft or 0
-                end
-            end
-
-            -- Server-side cooldown check
-            if isOpen and pd and pd.Gamemodes and pd.Gamemodes["Time Trial"] then
+    for _, diff in ipairs(getSelectedTTDiffs()) do
+        local s, win = pcall(function()
+            return gms.GetWindow("Time Trial", "The Hallway", diff)
+        end)
+        if s and win and win.Open == true then
+            -- เช็ค server-side cooldown ด้วย (ถ้า player ยังอยู่ใน CD ก็ข้ามไป)
+            local onCooldown = false
+            if pd and pd.Gamemodes and pd.Gamemodes["Time Trial"] then
                 local cd = pd.Gamemodes["Time Trial"].Cooldown
                 if cd and nowTick < cd then
-                    isOpen = false
+                    onCooldown = true
                 end
             end
-
-            if isOpen then
-                return diff -- Found an available difficulty ready to farm!
+            if not onCooldown then
+                return diff, win.OpensAt
             end
         end
     end
-    return nil
+    return nil, nil
 end
 
 local function handleTimeTrialLoop(now)
     if not CFG.AutoTimeTrialDungeon then
-        ttExitedDiffCooldown = {}
+        -- toggle ปิด → reset state (ไม่ต้องปิด toggle เอง)
         ttCurrentActiveDiff = nil
         ttHasJoinedOnce = false
+        ttWasInsideLast = false
+        ttLastJoinOpensAt = nil
         return false
     end
 
-    local inTT, ttFolder = isPlayerInTimeTrial()
+    local inTT = isPlayerInTimeTrial()
 
     if not inTT then
-        -- Outside Time Trial: look for any selected difficulty that is currently open & ready
-        local openDiff = getAvailableTimeTrialDiff()
-        if not openDiff then
-            -- Neither difficulty is open right now, let player farm normal world while waiting!
+        -- เพิ่งออกจาก TT → reset ให้พร้อม join รอบถัดไป
+        if ttWasInsideLast then
+            ttWasInsideLast = false
             ttHasJoinedOnce = false
-            return false
+            ttCurrentActiveDiff = nil
         end
 
-        -- Teleport in ONCE (join the ready difficulty)
+        -- เช็ค window ทุก Heartbeat — join ทันทีเมื่อ Open == true และ OpensAt ใหม่
         if not ttHasJoinedOnce then
-            if now - lastTimeTrialJoinAttempt >= 3.0 then
-                lastTimeTrialJoinAttempt = now
-                ttHasJoinedOnce = true
-                ttCurrentActiveDiff = openDiff
-                doJoinTimeTrial(openDiff)
+            local diff, opnsAt = getTTOpenWindow()
+            if diff and opnsAt ~= ttLastJoinOpensAt then
+                if now - TIMERS.lastTimeTrialJoinAttempt >= 3.0 then
+                    TIMERS.lastTimeTrialJoinAttempt = now
+                    ttHasJoinedOnce = true
+                    ttLastJoinOpensAt = opnsAt  -- mark window นี้ว่าใช้แล้ว
+                    ttCurrentActiveDiff = diff
+                    doJoinTimeTrial(diff)
+                end
             end
         end
-        return false
+        return false  -- ฟาร์ม normal world ระหว่างรอ window
     end
 
-    -- Currently inside Time Trial dungeon!
+    -- อยู่ใน TT
+    ttWasInsideLast = true
     ttHasJoinedOnce = false
 
+    -- Exit เมื่อถึง Target Exit Stage (slider)
     if CFG.TTCustomExitStage then
         local currentStage = getCurrentGamemodeStage()
-        if currentStage >= tonumber(CFG.TTExitStage) then
-            if ttCurrentActiveDiff then
-                -- Set 60-second cooldown for this specific difficulty so it won't re-enter, but can enter OTHER selected difficulties!
-                ttExitedDiffCooldown[ttCurrentActiveDiff] = tick() + 60
-            end
-            if now - lastGamemodeExitAttempt >= 1.0 then
-                lastGamemodeExitAttempt = now
+        if currentStage >= tonumber(CFG.TTExitStage or 25) then
+            if now - TIMERS.lastGamemodeExitAttempt >= 1.0 then
+                TIMERS.lastGamemodeExitAttempt = now
                 executeGamemodeQuit()
             end
             return true
         end
     end
 
-    -- Target monsters inside Time Trial dungeon directly
+    -- ฆ่า monster ด้วย Smart Cluster TP (multi-hit AOE)
     local gmEnemies = getGamemodeEnemies()
     if #gmEnemies > 0 then
-        table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
-        local target = gmEnemies[1]
-        teleportToTarget(target.Part, target.UID)
-        Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
-        Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+        local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(gmEnemies)
+        if optPos and #coveredUIDs > 0 then
+            teleportToCombat(optPos, coveredUIDs, primaryUID)
+            Library.Remote:Fire("ClickSystem", "Execute", coveredUIDs)
+            Library.Remote:Fire("ClickSystem", "CastSkill", coveredUIDs)
+        else
+            table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
+            local target = gmEnemies[1]
+            teleportToTarget(target.Part, target.UID)
+            Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
+            Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+        end
     else
-        -- Waiting for next room / wave in Time Trial - DO NOT attack overworld!
+        -- รอ wave ถัดไป — ห้าม hit overworld!
         currentLockedTargetUID = nil
+        currentCoveredTargetUIDs = {}
     end
     return true
 end
 
-local lastInvasionJoinAttempt = 0
 
 local function handleAutoMarineInvasion(now)
     if not CFG.AutoMarineInvasion then return false end
@@ -1655,8 +2326,8 @@ local function handleAutoMarineInvasion(now)
             end)
             if success and win and not win.Open then return false end
         end
-        if now - lastInvasionJoinAttempt >= 5.0 then
-            lastInvasionJoinAttempt = now
+        if now - TIMERS.lastInvasionJoinAttempt >= 5.0 then
+            TIMERS.lastInvasionJoinAttempt = now
             pcall(function()
                 Library.Remote:Fire("GamemodeSystem", "Enter", "Invasion", "Marine Invasion", CFG.InvasionDifficulty or "Easy", true)
             end)
@@ -1666,17 +2337,23 @@ local function handleAutoMarineInvasion(now)
 
     local gmEnemies = getGamemodeEnemies()
     if #gmEnemies > 0 then
-        table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
-        local target = gmEnemies[1]
-        teleportToTarget(target.Part, target.UID)
-        Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
-        Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+        local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(gmEnemies)
+        if optPos and #coveredUIDs > 0 then
+            teleportToCombat(optPos, coveredUIDs, primaryUID)
+            Library.Remote:Fire("ClickSystem", "Execute", coveredUIDs)
+            Library.Remote:Fire("ClickSystem", "CastSkill", coveredUIDs)
+        else
+            table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
+            local target = gmEnemies[1]
+            teleportToTarget(target.Part, target.UID)
+            Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
+            Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+        end
     end
     return true
 end
 
 
-local lastRaidCreateAttempt = 0
 
 local function handleAutoReturnHome()
     local pg = lp and lp:FindFirstChild("PlayerGui")
@@ -1725,8 +2402,8 @@ local function handleAutoRaidLoop(now)
     -- Case 1: Room is Created & Waiting to Start (Status == "Opened")
     if raidStatus == "Opened" then
         currentLockedTargetUID = nil -- Strictly DO NOT attack any overworld monster!
-        if now - lastRaidStartAttempt >= 1.0 then
-            lastRaidStartAttempt = now
+        if now - TIMERS.lastRaidStartAttempt >= 1.0 then
+            TIMERS.lastRaidStartAttempt = now
             pcall(function()
                 Library.Remote:Fire("GamemodeSystem", "Start", "Raid", true)
             end)
@@ -1740,40 +2417,57 @@ local function handleAutoRaidLoop(now)
             local currentRoom = getCurrentGamemodeStage()
             local exitTarget = tonumber(CFG.RaidExitRoom) or 5
             if currentRoom >= exitTarget and currentRoom > 1 then
-                if now - lastGamemodeExitAttempt >= 1.0 then
-                    lastGamemodeExitAttempt = now
+                if now - TIMERS.lastGamemodeExitAttempt >= 1.0 then
+                    TIMERS.lastGamemodeExitAttempt = now
                     executeGamemodeQuit()
                 end
                 return true
             end
         end
 
-        -- Target monsters inside Raid room directly
+        -- Target monsters inside Raid room directly (Multi-Target Combat Circle)
         local gmEnemies = getGamemodeEnemies()
         if #gmEnemies > 0 then
-            table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
-            local target = gmEnemies[1]
-            currentLockedTargetUID = target.UID
-            teleportToTarget(target.Part, target.UID)
-            if CFG.AutoClick then
-                Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
-            end
-            if CFG.AutoCastSkill then
-                Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+            local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(gmEnemies)
+            if optPos and #coveredUIDs > 0 then
+                teleportToCombat(optPos, coveredUIDs, primaryUID)
+                if CFG.AutoClick then
+                    Library.Remote:Fire("ClickSystem", "Execute", coveredUIDs)
+                end
+                if CFG.AutoCastSkill then
+                    Library.Remote:Fire("ClickSystem", "CastSkill", coveredUIDs)
+                end
+            else
+                table.sort(gmEnemies, function(a, b) return a.HP < b.HP end)
+                local target = gmEnemies[1]
+                currentLockedTargetUID = target.UID
+                teleportToTarget(target.Part, target.UID)
+                if CFG.AutoClick then
+                    Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
+                end
+                if CFG.AutoCastSkill then
+                    Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+                end
             end
         else
             -- Waiting for next room / wave to spawn inside raid
             -- DO NOT target overworld monsters!
             currentLockedTargetUID = nil
+            currentCoveredTargetUIDs = {}
         end
         return true
     end
 
     -- Case 3: Outside Raid (raidStatus == "None")
     -- If a room was just created, wait for server to teleport us into raid! Do not interrupt with ticket checks!
-    if now - lastRaidCreateAttempt < 4.0 then
+    if now - TIMERS.lastRaidCreateAttempt < 4.0 then
         currentLockedTargetUID = nil
         return true
+    end
+
+    -- เพิ่งออกจาก raid → reset target lock ให้ fresh TP ทำงานได้ทันที
+    if lastTeleportedUID ~= nil and raidStatus == "None" and (now - TIMERS.lastRaidCreateAttempt >= 4.0) then
+        lastTeleportedUID = nil
     end
 
     local targetMap = CFG.RaidTargetMap or "DBZ"
@@ -1781,10 +2475,11 @@ local function handleAutoRaidLoop(now)
 
     -- 3A. Out of tickets!
     if tickets <= 0 then
-        -- If user did NOT enable AutoFarmTicketIfNone, stop immediately! Do not farm and do not teleport!
+        -- ไม่ได้เปิด AutoFarmTicketIfNone → ปล่อยให้ฟาร์ม normal world ได้เลย (ไม่ block)
         if not CFG.AutoFarmTicketIfNone then
             currentLockedTargetUID = nil
-            return true -- Handled: Auto Raid is waiting for tickets. Do NOT farm!
+            lastTeleportedUID = nil  -- force re-TP ใน normal farm
+            return false -- ให้ heartbeat ตกลงไปทำ normal farm
         end
 
         local curMap = getCurrentMap()
@@ -1802,25 +2497,28 @@ local function handleAutoRaidLoop(now)
         -- Farm mid-tier sub-boss monster ONLY (รอง Secret Boss) for ticket drops in targetMap
         local target = getMidTierRaidTicketMonster(targetMap)
         if target then
-            currentLockedTargetUID = target.UID
-            teleportToTarget(target.Part, target.UID)
-            if CFG.AutoClick then
-                Library.Remote:Fire("ClickSystem", "Execute", { target.UID })
-            end
-            if CFG.AutoCastSkill then
-                Library.Remote:Fire("ClickSystem", "CastSkill", { target.UID })
+            local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster({ target })
+            if optPos and #coveredUIDs > 0 then
+                teleportToCombat(optPos, coveredUIDs, primaryUID)
+                if CFG.AutoClick then
+                    Library.Remote:Fire("ClickSystem", "Execute", coveredUIDs)
+                end
+                if CFG.AutoCastSkill then
+                    Library.Remote:Fire("ClickSystem", "CastSkill", coveredUIDs)
+                end
             end
         else
             -- Sub-boss is temporarily dead (respawning) - DO NOT TOUCH WEAK MOBS!
             currentLockedTargetUID = nil
+            currentCoveredTargetUIDs = {}
         end
         return true
     end
 
     -- 3B. We have tickets! Create the raid room
-    if now - lastRaidStartAttempt >= 3.0 then
-        lastRaidStartAttempt = now
-        lastRaidCreateAttempt = now
+    if now - TIMERS.lastRaidStartAttempt >= 3.0 then
+        TIMERS.lastRaidStartAttempt = now
+        TIMERS.lastRaidCreateAttempt = now
         pcall(function()
             Library.Remote:Fire("GamemodeSystem", "Create", "Raid", targetMap, "Easy", false, true)
         end)
@@ -1833,17 +2531,28 @@ local function handleAutoPortalLoop(now)
     local inPortal, portalFolder = isPlayerInPortal()
 
     if inPortal then
-        local uid, part = selectTargetEnemy()
-        if part and uid then
-            teleportToTarget(part, uid)
-            Library.Remote:Fire("ClickSystem", "Execute", { uid })
-            Library.Remote:Fire("ClickSystem", "CastSkill", { uid })
+        local pEnemies = getGamemodeEnemies()
+        if #pEnemies == 0 then pEnemies = getMapEnemies("All") end
+        if #pEnemies > 0 then
+            local optPos, primaryUID, coveredUIDs = findOptimalCombatCluster(pEnemies)
+            if optPos and #coveredUIDs > 0 then
+                teleportToCombat(optPos, coveredUIDs, primaryUID)
+                Library.Remote:Fire("ClickSystem", "Execute", coveredUIDs)
+                Library.Remote:Fire("ClickSystem", "CastSkill", coveredUIDs)
+            else
+                local uid, part = selectTargetEnemy()
+                if part and uid then
+                    teleportToTarget(part, uid)
+                    Library.Remote:Fire("ClickSystem", "Execute", { uid })
+                    Library.Remote:Fire("ClickSystem", "CastSkill", { uid })
+                end
+            end
         end
         return true
     end
 
-    if now - lastPortalTick < 5.0 then return false end
-    lastPortalTick = now
+    if now - TIMERS.lastPortalTick < 5.0 then return false end
+    TIMERS.lastPortalTick = now
 
     local pd = Library and Library.PlayerData
     local items = pd and pd.Items or {}
@@ -1865,8 +2574,8 @@ end
 
 local function handleAutoRankUp(now)
     if not CFG.AutoRankUp then return end
-    if now - lastRankUp < 1.0 then return end
-    lastRankUp = now
+    if now - TIMERS.lastRankUp < 1.0 then return end
+    TIMERS.lastRankUp = now
 
     local pd = Library and Library.PlayerData
     if not (pd and Library.Remote) then return end
@@ -1933,33 +2642,54 @@ local function getEquippedRaceInfo()
     return raceNames[orderNum] or "Earthling", raceRarities[orderNum] or 1
 end
 
+local function shouldStopRace(pd)
+    local target = CFG.RaceStopRarity or "Any"
+    if target == "Any" then return false end
+    local shouldStop, name, rarity = checkGachaStopCondition("Race", target)
+    if shouldStop then return true, name, rarity end
+
+    local reqRank = parseTargetRank(target)
+    if reqRank > 0 then
+        local raceName, raceRarity = getEquippedRaceInfo()
+        if raceRarity >= reqRank then
+            return true, raceName, ALL_RARITY_NAMES[raceRarity] or "Rare+"
+        end
+    end
+
+    return false
+end
+
 local function handleAutoRaceSpin(now)
     if not CFG.AutoRaceSpin then return end
-    if now - lastRaceSpin < 0.5 then return end
-    lastRaceSpin = now
+    if now - TIMERS.lastRaceSpin < 0.5 then return end
+    TIMERS.lastRaceSpin = now
 
     local pd = Library and Library.PlayerData
     if not (pd and Library.Remote) then return end
 
-    local raceName, raceRarity = getEquippedRaceInfo()
-    local targetThreshold = RARITY_LEVEL[CFG.RaceStopRarity] or 5
-
-    -- Stop spinning if current race rarity >= threshold
-    if raceRarity >= targetThreshold then
+    local shouldStop, name, rarity = shouldStopRace(pd)
+    if shouldStop then
+        stopSpinToggle("AutoRaceSpin", "Race", name, rarity)
         return
+    end
+
+    if CFG.AutoUnlockRace and not (pd.Unlocked and pd.Unlocked["Gacha_Race"]) then
+        local playerGold = pd.Gold or (pd.Items and pd.Items.Gold) or 0
+        if playerGold >= 10000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Race")
+        end
     end
 
     local items = pd.Items or {}
     local raceCoins = items["RaceCoins"] or 0
     if raceCoins >= 20 then
-        -- Correct remote signature: Category="Race", Type="Default"
-        pcall(function()
-            Library.Remote:Fire("GachaSystem", "Spin", "Race", "Default", {}, nil)
-        end)
+        Library.Remote:Fire("GachaSystem", "Spin", "Race", "Default", {}, nil)
     end
 end
 
--- BEGIN SRC2 BALANCED UPGRADE MERGE
+-- ══════════════════════════════════════════════════════════
+-- UPGRADE SYSTEMS & BALANCED ENGINE
+-- ══════════════════════════════════════════════════════════
 local UPGRADE_SYSTEM_DATA = {
     ["Warrior Upgrades"] = {
         Currency = "WarriorCoins",
@@ -2007,13 +2737,25 @@ local UPGRADE_SYSTEM_DATA = {
             CritDMG    = { MaxLevel = 10 },
             WalkSPD    = { MaxLevel = 10 }
         }
+    },
+    ["Ninja Progression"] = {
+        Currency = "NinjaCoins",
+        Targets = {
+            Energy = { MaxLevel = 100 }
+        }
+    },
+    ["Ant Progression"] = {
+        Currency = "AntCoins",
+        Targets = {
+            Energy = { MaxLevel = 100 }
+        }
     }
 }
 
--- Upgrade metadata and single-level purchases are merged from src 2.
+-- Shared upgrade requests: one pending purchase per system.
 local UPGRADE_SYSTEM_NAMES = {
     "Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades",
-    "Portal Upgrades", "Class Tree"
+    "Portal Upgrades", "Class Tree", "Ninja Progression", "Ant Progression"
 }
 
 local UpgradeServiceRef = nil
@@ -2179,7 +2921,7 @@ local function buyBalancedUpgrade(systemName, targetList, now, buyMax)
     state.NextIndex = candidateIndex % #targets + 1
     local ok = pcall(function()
         if buyMax == true then
-            -- Only the explicitly disabled Global Balance mode buys max.
+            -- Disabling Balance permits a max purchase for the chosen stat.
             Library.Remote:Fire("UpgradeSystem", "Buy", systemName, candidateStat, true)
         else
             Library.Remote:Fire("UpgradeSystem", "Buy", systemName, candidateStat)
@@ -2190,37 +2932,137 @@ local function buyBalancedUpgrade(systemName, targetList, now, buyMax)
 end
 
 local function handleAutoGlobalUpgrades(now)
-    if not CFG.AutoUpgrade or now - lastUpgrade < 0.4 then return end
-    lastUpgrade = now
+    if not CFG.AutoUpgrade or now - TIMERS.lastUpgrade < 0.4 then return end
+    TIMERS.lastUpgrade = now
     for _, systemName in ipairs(normalizeUpgradeSystems()) do
         buyBalancedUpgrade(systemName, nil, now, CFG.BalanceGlobalUpgrades == false)
     end
 end
 
--- END SRC2 BALANCED UPGRADE MERGE
+-- Passive Ranks & Stop Threshold Engine
+local GACHA_TARGET_MAPS = {
+    Titan = {
+        ["Any"] = 0, ["Armored Titan (Rare+)"] = 2, ["Beast Titan (Epic+)"] = 3,
+        ["Colossal Titan (Legendary+)"] = 4, ["Attack Titan (Mythical+)"] = 5, ["Founding Titan (Secret)"] = 6,
+    },
+    Eye = {
+        ["Any"] = 0, ["Sharingan (Rare+)"] = 2, ["Mangekyou Sharingan (Epic+)"] = 3,
+        ["Eternal Mangekyou Sharingan (Legendary+)"] = 4, ["Rinnegan (Mythical+)"] = 5, ["Rinne Sharingan (Secret)"] = 6,
+    },
+    Sin = {
+        ["Any"] = 0, ["Greed (Rare+)"] = 2, ["Sloth (Epic+)"] = 3,
+        ["Gluttony (Legendary+)"] = 4, ["Pride (Mythical+)"] = 5, ["Wrath (Secret)"] = 6,
+    },
+    Hunter = {
+        ["Any"] = 0, ["D-Rank (Rare+)"] = 2, ["C-Rank (Epic+)"] = 3,
+        ["B-Rank (Legendary+)"] = 4, ["A-Rank (Mythical+)"] = 5, ["S-Rank (Secret)"] = 6,
+    },
+    Shadow = {
+        ["Any"] = 0, ["Elite (Rare+)"] = 2, ["Knight (Epic+)"] = 3,
+        ["Commander (Legendary+)"] = 4, ["Marshal (Mythical+)"] = 5, ["Monarch (Secret)"] = 6,
+    },
+    Haki = {
+        ["Any"] = 0, ["Armament (Rare+)"] = 2, ["Future Sight (Epic+)"] = 3,
+        ["Emission (Legendary+)"] = 4, ["Conqueror (Mythical+)"] = 5, ["Supreme King (Secret)"] = 6,
+    },
+    Amulet = {
+        ["Any"] = 0, ["Tier II (Rare+)"] = 2, ["Tier III (Epic+)"] = 3,
+        ["Tier IV (Legendary+)"] = 4, ["Tier V (Mythical+)"] = 5, ["Tier VI (Secret)"] = 6,
+    },
+    WeaponPassive = {
+        ["Any"] = 0, ["Fine Grade (Rare+)"] = 2, ["Skillful Grade (Epic+)"] = 3,
+        ["Great Grade (Legendary+)"] = 4, ["Supreme Grade (Mythical+)"] = 5, ["Black Blade (Secret)"] = 6,
+    },
+    HeroPassive = {
+        ["Any"] = 0, ["Bone Breaker (Rare+)"] = 2, ["Wall Breaker (Epic+)"] = 3,
+        ["Limit Breaker (Legendary+)"] = 4, ["Soul Breaker (Mythical+)"] = 5, ["World Breaker (Secret)"] = 6,
+    }
+}
+local _SPIN_TIMERS = {}
+
+local OFFLINE_UPGRADE_MAP = {
+    ["Dreamer (Offline Energy)"]       = "Energy",
+    ["Hoarder (Offline Gold)"]         = "Gold",
+    ["Hibernation (Offline Max Time)"] = "MaxTime"
+}
+local OFFLINE_UPGRADE_NAMES = {
+    "Dreamer (Offline Energy)",
+    "Hoarder (Offline Gold)",
+    "Hibernation (Offline Max Time)"
+}
+
+local WARRIOR_UPGRADE_NAMES = {"Energy", "Damage", "Gold", "AttackRange"}
+
+
 
 local function handleAutoWarriorUpgrade(now)
-    if not CFG.AutoUpgradeWarrior then return end
-    if now - lastWarriorUp < 0.4 then return end
-    lastWarriorUp = now
-
-    local priority = CFG.WarriorUpgradePriority
-    if priority == "All (Balanced)" then
-        buyBalancedUpgrade("Warrior Upgrades", {"Energy", "Damage", "Gold", "AttackRange"}, now)
-    else
-        buyBalancedUpgrade("Warrior Upgrades", {priority}, now)
+    if not CFG.AutoUpgradeWarrior or now - TIMERS.lastWarriorUp < 0.4 then return end
+    TIMERS.lastWarriorUp = now
+    local selected = CFG.WarriorSelectedUpgradeNames or WARRIOR_UPGRADE_NAMES
+    local targets = {}
+    for _, stat in ipairs(WARRIOR_UPGRADE_NAMES) do
+        if isItemInList(selected, stat) then table.insert(targets, stat) end
     end
+    buyBalancedUpgrade("Warrior Upgrades", targets, now, CFG.BalanceWarriorUpgrades == false)
 end
 
-local lastTitanSpin = 0
-local lastHarborTick = 0
-local lastCommandmentTick = 0
-local lastJewelTick = 0
+
+
+
+
+local function shouldStopTitan(pd)
+    local target = CFG.TitanStopRarity or "Any"
+    return checkGachaStopCondition("Titan", target, nil, GACHA_TARGET_MAPS.Titan)
+end
+
+local function shouldStopWeaponT1(pd)
+    local target = CFG.WeaponT1StopRarity or "Any"
+    local reqRank = parseTargetRank(target)
+    if reqRank <= 0 then return false end
+    if not (pd and pd.Weapons) then return false end
+    for uid, wep in pairs(pd.Weapons) do
+        local wepId = (type(wep) == "table" and (wep.Id or uid)) or uid
+        local rName, rOrder = getItemRarity(wepId)
+        if rOrder >= reqRank then
+            return true, wepId, rName, rOrder
+        end
+    end
+    return false
+end
+
+local function shouldStopWeaponPassive(pd)
+    local target = CFG.TargetWeaponPassive or "Any"
+    return checkGachaStopCondition("Weapon Passive", target, nil, GACHA_TARGET_MAPS.WeaponPassive)
+end
+
+local function shouldStopHeroPassive(pd)
+    local target = CFG.TargetHeroPassive or "Any"
+    return checkGachaStopCondition("Hero Passive", target, nil, GACHA_TARGET_MAPS.HeroPassive)
+end
 
 local function handleAutoTitanSpin(now)
     if not CFG.AutoTitanSpin then return end
-    if now - lastTitanSpin < 0.6 then return end
-    lastTitanSpin = now
+    if now - (_SPIN_TIMERS.Titan or 0) < 0.6 then return end
+    _SPIN_TIMERS.Titan = now
+
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+
+    -- Auto unlock Titan via remote before spinning if affordable
+    if CFG.AutoUnlockTitan and not (pd.Unlocked and pd.Unlocked["Gacha_Titan"]) then
+        local playerGold = pd.Gold or (pd.Items and pd.Items.Gold) or 0
+        if playerGold >= 4860000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Titan")
+        end
+    end
+
+    -- Stop condition check (Stop at or above target tier)
+    local shouldStop, name, r = shouldStopTitan(pd)
+    if shouldStop then
+        stopSpinToggle("AutoTitanSpin", "Titan Banner", name, r)
+        return
+    end
+
     pcall(function()
         Library.Remote:Fire("GachaSystem", "Spin", "Titan", "Default", {}, nil)
     end)
@@ -2228,59 +3070,278 @@ end
 
 local function handleAutoWeaponSpins(now)
     if not CFG.AutoWeaponSummon and not CFG.AutoWeaponPassive then return end
-    if now - lastWeaponSpin < 0.8 then return end
-    lastWeaponSpin = now
+    if now - TIMERS.lastWeaponSpin < 0.8 then return end
+    TIMERS.lastWeaponSpin = now
 
     local pd = Library and Library.PlayerData
     local items = pd and pd.Items or {}
 
+    -- Auto Weapon T1 Summon
     if CFG.AutoWeaponSummon and (items["WeaponCoinsT1"] or 0) > 0 then
-        Library.Remote:Fire("GachaSystem", "Spin", "Weapon", "T1", {}, nil)
+        if not (pd and pd.Unlocked and pd.Unlocked["Gacha_Weapon_T1"]) and CFG.AutoUnlockWeapon then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Weapon_T1")
+        end
+
+        -- Stop condition check (Stop at or above target rarity)
+        local shouldStop, name, r = shouldStopWeaponT1(pd)
+        if shouldStop then
+            stopSpinToggle("AutoWeaponSummon", "Weapon T1", name, r)
+        else
+            Library.Remote:Fire("GachaSystem", "Spin", "Weapon", "T1", {}, nil)
+        end
     end
 
+    -- Auto Weapon Passive Spin
     if CFG.AutoWeaponPassive and (items["WeaponPassiveCoins"] or 0) > 0 then
-        -- Check if current weapon has matching target passive (Auto Lock)
-        local target = CFG.TargetWeaponPassive or "Any"
-        if target ~= "Any" and pd and pd.Equipped then
-            local eqWepId = pd.Equipped.Weapon
-            local wepData = eqWepId and pd.Weapons and pd.Weapons[eqWepId]
-            local curPassive = wepData and (wepData.Passive or wepData.WeaponPassive or wepData.Skill)
-            if curPassive and tostring(curPassive):lower():find(target:lower()) then
-                CFG.AutoWeaponPassive = false -- Matched! Lock & stop spinning
-                return
-            end
+        -- Auto unlock Weapon Passive via remote before spinning if not yet unlocked
+        if not (pd and pd.Unlocked and pd.Unlocked["Gacha_Weapon Passive"]) then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Weapon Passive")
         end
+
+        -- Check target tier stop condition (Stop at or above)
+        local shouldStop, name, r = shouldStopWeaponPassive(pd)
+        if shouldStop then
+            stopSpinToggle("AutoWeaponPassive", "Weapon Passive", name, r)
+            return
+        end
+
         Library.Remote:Fire("GachaSystem", "Spin", "WeaponPassive", "OnePiece", {}, nil)
     end
 end
 
 local function handleAutoHeroPassive(now)
     if not CFG.AutoHeroPassive then return end
-    if now - lastHeroPassive < 0.8 then return end
-    lastHeroPassive = now
+    if now - TIMERS.lastHeroPassive < 0.8 then return end
+    TIMERS.lastHeroPassive = now
 
     local pd = Library and Library.PlayerData
     local items = pd and pd.Items or {}
 
+    -- Auto unlock Hero Passive via remote before spinning if not yet unlocked
+    if not (pd and pd.Unlocked and pd.Unlocked["Gacha_Hero Passive"]) then
+        Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Hero Passive")
+    end
+
     if (items["HeroPassiveCoins"] or 0) > 0 then
-        local target = CFG.TargetHeroPassive or "Any"
-        if target ~= "Any" and pd then
-            local curHeroPassive = pd.HeroPassive or (pd.Hero and pd.Hero.Passive)
-            if curHeroPassive and tostring(curHeroPassive):lower():find(target:lower()) then
-                CFG.AutoHeroPassive = false -- Matched! Lock & stop spinning
-                return
-            end
+        -- Check target tier stop condition (Stop at or above)
+        local shouldStop, name, r = shouldStopHeroPassive(pd)
+        if shouldStop then
+            stopSpinToggle("AutoHeroPassive", "Hero Passive", name, r)
+            return
         end
+
         Library.Remote:Fire("GachaSystem", "Spin", "Hero Passive", "AOT", {}, nil)
     end
 end
 
-local function handleAutoOfflineUpgrades(now)
-    if not CFG.AutoOfflineUpgrades then return end
-    if now - lastOfflineUp < 0.45 then return end
-    lastOfflineUp = now
+local function handleAutoEyeSpin(now)
+    if not CFG.AutoEyeSpin then return end
+    if now - (_SPIN_TIMERS.Eye or 0) < 0.6 then return end
+    _SPIN_TIMERS.Eye = now
 
-    buyBalancedUpgrade("Offline Upgrades", {"Energy", "Gold", "MaxTime"}, now)
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+    local items = pd.Items or {}
+
+    if CFG.AutoUnlockEye and not (pd.Unlocked and pd.Unlocked["Gacha_Eye Technique"]) then
+        local playerGold = pd.Gold or items.Gold or 0
+        if playerGold >= 2361960000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Eye Technique")
+        end
+    end
+
+    local shouldStop, name, r = checkGachaStopCondition("Eye Technique", CFG.EyeStopRarity or "Any", nil, GACHA_TARGET_MAPS.Eye)
+    if shouldStop then
+        stopSpinToggle("AutoEyeSpin", "Eye Technique", name, r)
+        return
+    end
+
+    if (items["EyeCoins"] or items["EyeTechniqueCoins"] or 0) > 0 or true then
+        Library.Remote:Fire("GachaSystem", "Spin", "Eye Technique", "Naruto", {}, nil)
+    end
+end
+
+local function handleAutoSinSpin(now)
+    if not CFG.AutoSinSpin then return end
+    if now - (_SPIN_TIMERS.Sin or 0) < 0.6 then return end
+    _SPIN_TIMERS.Sin = now
+
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+    local items = pd.Items or {}
+
+    if CFG.AutoUnlockSin and not (pd.Unlocked and pd.Unlocked["Gacha_Sin"]) then
+        local playerGold = pd.Gold or items.Gold or 0
+        if playerGold >= 5165606520000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Sin")
+        end
+    end
+
+    local shouldStop, name, r = checkGachaStopCondition("Sin", CFG.SinStopRarity or "Any", nil, GACHA_TARGET_MAPS.Sin)
+    if shouldStop then
+        stopSpinToggle("AutoSinSpin", "Sin", name, r)
+        return
+    end
+
+    Library.Remote:Fire("GachaSystem", "Spin", "Sin", "Default", {}, nil)
+end
+
+local function handleAutoHunterRankSpin(now)
+    if not CFG.AutoHunterRankSpin then return end
+    if now - (_SPIN_TIMERS.Hunter or 0) < 0.6 then return end
+    _SPIN_TIMERS.Hunter = now
+
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+    local items = pd.Items or {}
+
+    if CFG.AutoUnlockHunter and not (pd.Unlocked and pd.Unlocked["Gacha_Hunter Rank"]) then
+        local playerGold = pd.Gold or items.Gold or 0
+        if playerGold >= 135566177510880000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Hunter Rank")
+        end
+    end
+
+    local shouldStop, name, r = checkGachaStopCondition("Hunter Rank", CFG.HunterRankStopRarity or "Any", nil, GACHA_TARGET_MAPS.Hunter)
+    if shouldStop then
+        stopSpinToggle("AutoHunterRankSpin", "Hunter Rank", name, r)
+        return
+    end
+
+    Library.Remote:Fire("GachaSystem", "Spin", "Hunter Rank", "SoloLeveling", {}, nil)
+end
+
+local function handleAutoShadowPassiveSpin(now)
+    if not CFG.AutoShadowPassiveSpin then return end
+    if now - (_SPIN_TIMERS.Shadow or 0) < 0.6 then return end
+    _SPIN_TIMERS.Shadow = now
+
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+    local items = pd.Items or {}
+
+    if CFG.AutoUnlockShadow and not (pd.Unlocked and pd.Unlocked["Gacha_Shadow Passive"]) then
+        local playerGold = pd.Gold or items.Gold or 0
+        if playerGold >= 542264710043520000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Shadow Passive")
+        end
+    end
+
+    local shouldStop, name, r = checkGachaStopCondition("Shadow Passive", CFG.ShadowPassiveStopRarity or "Any", nil, GACHA_TARGET_MAPS.Shadow)
+    if shouldStop then
+        stopSpinToggle("AutoShadowPassiveSpin", "Shadow Passive", name, r)
+        return
+    end
+
+    Library.Remote:Fire("GachaSystem", "Spin", "Shadow Passive", "SoloLeveling", {}, nil)
+end
+
+local function handleAutoHakiSpin(now)
+    if not CFG.AutoHakiSpin then return end
+    if now - (_SPIN_TIMERS.Haki or 0) < 0.6 then return end
+    _SPIN_TIMERS.Haki = now
+
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+    local items = pd.Items or {}
+
+    if CFG.AutoUnlockHaki and not (pd.Unlocked and pd.Unlocked["Gacha_Haki"]) then
+        local playerGold = pd.Gold or items.Gold or 0
+        if playerGold >= 65885162270288000000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Haki")
+        end
+    end
+
+    local shouldStop, name, r = checkGachaStopCondition("Haki", CFG.HakiStopRarity or "Any", nil, GACHA_TARGET_MAPS.Haki)
+    if shouldStop then
+        stopSpinToggle("AutoHakiSpin", "Haki", name, r)
+        return
+    end
+
+    Library.Remote:Fire("GachaSystem", "Spin", "Haki", "OnePiece", {}, nil)
+end
+
+local function handleAutoAmuletSpin(now)
+    if not CFG.AutoAmuletSpin then return end
+    if now - (_SPIN_TIMERS.Amulet or 0) < 0.6 then return end
+    _SPIN_TIMERS.Amulet = now
+
+    local pd = Library and Library.PlayerData
+    if not (pd and Library.Remote) then return end
+    local items = pd.Items or {}
+
+    if CFG.AutoUnlockAmulet and not (pd.Unlocked and pd.Unlocked["Gacha_Amulet Building"]) then
+        local playerGold = pd.Gold or items.Gold or 0
+        if playerGold >= 20662426080000 then
+            Library.Remote:Fire("UnlockSystem", "Validate", "Gacha_Amulet Building")
+        end
+    end
+
+    local cat = CFG.AmuletCategory or "Energy"
+    local shouldStop, name, r = checkGachaStopCondition("Amulet Building", CFG.AmuletStopRarity or "Any", cat, GACHA_TARGET_MAPS.Amulet)
+    if shouldStop then
+        stopSpinToggle("AutoAmuletSpin", "Amulet (" .. cat .. ")", name, r)
+        return
+    end
+
+    Library.Remote:Fire("GachaSystem", "Spin", "Amulet Building", cat, {}, nil)
+end
+
+
+local function handleAutoOfflineUpgrades(now)
+    if not CFG.AutoOfflineUpgrades or now - TIMERS.lastOfflineUp < 0.45 then return end
+    TIMERS.lastOfflineUp = now
+    local selected = CFG.OfflineSelectedUpgradeNames or OFFLINE_UPGRADE_NAMES
+    local targets = {}
+    for _, name in ipairs(OFFLINE_UPGRADE_NAMES) do
+        local key = OFFLINE_UPGRADE_MAP[name]
+        if isItemInList(selected, name) or isItemInList(selected, key) then
+            table.insert(targets, key)
+        end
+    end
+    buyBalancedUpgrade("Offline Upgrades", targets, now, CFG.BalanceOfflineUpgrades == false)
+end
+
+
+local function handleAutoPortalUpgrades(now)
+    if not CFG.AutoUpgradePortal then return end
+    if now - TIMERS.lastPortalUp < 0.45 then return end
+    TIMERS.lastPortalUp = now
+
+    local targets = CFG.PortalSelectedUpgradeNames or {"Energy", "Damage", "MaxEnemy", "WarriorDropChance"}
+    if #targets > 0 then
+        buyBalancedUpgrade("Portal Upgrades", targets, now, CFG.BalancePortalUpgrades == false)
+    end
+end
+
+
+local function handleAutoClassTreeUpgrades(now)
+    if not CFG.AutoUpgradeClassTree then return end
+    if now - TIMERS.lastClassTreeUp < 0.45 then return end
+    TIMERS.lastClassTreeUp = now
+
+    local targets = CFG.ClassTreeSelectedUpgradeNames or {"Start", "Energy", "Damage", "Gold", "CritChance", "CritDMG", "WalkSPD"}
+    if #targets > 0 then
+        buyBalancedUpgrade("Class Tree", targets, now, CFG.BalanceClassTreeUpgrades == false)
+    end
+end
+
+
+local function handleAutoNinjaUpgrades(now)
+    if not CFG.AutoUpgradeNinja then return end
+    if now - TIMERS.lastNinjaUp < 0.45 then return end
+    TIMERS.lastNinjaUp = now
+
+    buyBalancedUpgrade("Ninja Progression", {"Energy"}, now)
+end
+
+
+local function handleAutoAntUpgrades(now)
+    if not CFG.AutoUpgradeAnt then return end
+    if now - TIMERS.lastAntUp < 0.45 then return end
+    TIMERS.lastAntUp = now
+
+    buyBalancedUpgrade("Ant Progression", {"Energy"}, now)
 end
 
 local function doEquipBestTitle()
@@ -2408,9 +3469,11 @@ end
 
 local function doPirateShopBuy()
     if not (Library and Library.Remote) then return end
+    local selected = CFG.PirateSelectedJuiceNames
+    if not selected or type(selected) ~= "table" then return end
     local amt = CFG.PirateShopBuyAmount or 1
     for name, id in pairs(PIRATE_JUICE_MAP) do
-        if isItemInList(CFG.PirateSelectedJuiceNames, name) or isItemInList(CFG.PirateShopSelection, id) then
+        if isItemInList(selected, name) then
             pcall(function()
                 Library.Remote:Fire("StockShopSystem", "Buy", "Pirate", id, amt)
             end)
@@ -2418,19 +3481,17 @@ local function doPirateShopBuy()
     end
 end
 
-local function doTimeTrialUpgrade(now)
+local function doTimeTrialUpgrade()
     if not (Library and Library.Remote) then return end
     local selected = CFG.TTSelectedUpgradeNames or {}
     local targets = {}
-    for name, key in pairs(TT_UPGRADE_MAP) do
-        if isItemInList(selected, name) then
+    for _, name in ipairs({"Relentless (Energy +5%)", "Breaker (Damage +5%)", "Scavenger (Gold +5%)", "Overdrive (AtkSPD +2.5%)"}) do
+        local key = TT_UPGRADE_MAP[name]
+        if isItemInList(selected, name) or isItemInList(selected, key) then
             table.insert(targets, key)
         end
     end
-    table.sort(targets)
-    if #targets > 0 then
-        buyBalancedUpgrade("Time Trial Upgrades", targets, now)
-    end
+    buyBalancedUpgrade("Time Trial Upgrades", targets, nil, CFG.BalanceTTUpgrades == false)
 end
 
 
@@ -2645,7 +3706,7 @@ end
 -- MAIN HEARTBEAT LOOP (STRICT PRIORITY HIERARCHY)
 -- ══════════════════════════════════════════════════════════
 _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
-    local now = tick()
+    local now = os.clock()
 
     -- 0. Instant Return on Results Screen (Skip Game Result countdown)
     if CFG.AutoReturnHome ~= false then
@@ -2656,6 +3717,8 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
     local hum = getHum()
     local root = getRoot()
     if hum and root then
+        hum.UseJumpPower = true
+        hum.JumpPower = CFG.JumpPower or 100
         if CFG.DashHack then
             local lv = root:FindFirstChildOfClass("LinearVelocity") or root:FindFirstChild("DashVelocity")
             if lv then
@@ -2691,30 +3754,33 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
     local wallHandled = handleSmartWallBreaking(now)
 
     if not wallHandled and CFG.AutoFarm then
-        local uid, part = selectTargetEnemy()
-        teleportToTarget(part, uid)
+        local uid, part, model, optPos, coveredUIDs = selectTargetEnemy()
+        if optPos and coveredUIDs and #coveredUIDs > 0 then
+            teleportToCombat(optPos, coveredUIDs, uid)
+        elseif part and uid then
+            teleportToTarget(part, uid)
+        end
     end
 
     -- Auto Click
-    if CFG.AutoClick and (now - lastClick >= CFG.ClickDelay) then
-        lastClick = now
-        local clickTgt = currentLockedTargetUID and { currentLockedTargetUID } or Library.Target
+    if CFG.AutoClick and (now - TIMERS.lastClick >= CFG.ClickDelay) then
+        TIMERS.lastClick = now
+        local clickTgt = (#currentCoveredTargetUIDs > 0 and currentCoveredTargetUIDs) or (currentLockedTargetUID and { currentLockedTargetUID }) or Library.Target
         Library.Remote:Fire("ClickSystem", "Execute", clickTgt)
     end
 
     -- Auto Cast Skill
-    if CFG.AutoCastSkill and (now - lastClick >= 0.2) then
-        local skillTgt = currentLockedTargetUID and { currentLockedTargetUID } or Library.Target
+    if CFG.AutoCastSkill and (now - TIMERS.lastSkill >= 0.2) then
+        TIMERS.lastSkill = now
+        local skillTgt = (#currentCoveredTargetUIDs > 0 and currentCoveredTargetUIDs) or (currentLockedTargetUID and { currentLockedTargetUID }) or Library.Target
         Library.Remote:Fire("ClickSystem", "CastSkill", skillTgt)
     end
 
     -- Auto Quests
     handleAutoQuests(now)
 
-    -- Balanced System Unlocker
-    if CFG.BalancedUnlocker then
-        handleBalancedUnlocks(now)
-    end
+    -- Auto Unlock Individual Systems via Remote when affordable
+    handleIndividualSystemUnlocks(now)
 
     -- Automated Background Systems
     handleAutoRankUp(now)
@@ -2722,11 +3788,21 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
     handleAutoWarriorUpgrade(now)
     handleAutoWeaponSpins(now)
     handleAutoHeroPassive(now)
+    handleAutoEyeSpin(now)
+    handleAutoSinSpin(now)
+    handleAutoHunterRankSpin(now)
+    handleAutoShadowPassiveSpin(now)
+    handleAutoHakiSpin(now)
+    handleAutoAmuletSpin(now)
     handleAutoOfflineUpgrades(now)
+    handleAutoPortalUpgrades(now)
+    handleAutoClassTreeUpgrades(now)
+    handleAutoNinjaUpgrades(now)
+    handleAutoAntUpgrades(now)
 
     -- Auto Summon
-    if CFG.AutoSummon and (now - lastSummonTick >= 0.5) then
-        lastSummonTick = now
+    if CFG.AutoSummon and (now - TIMERS.lastSummonTick >= 0.5) then
+        TIMERS.lastSummonTick = now
         doAutoSummon()
     end
 
@@ -2734,8 +3810,8 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
     handleAutoTitanSpin(now)
 
     -- Auto Harbor (Expedition)
-    if CFG.AutoHarbor and (now - lastHarborTick >= 5.0) then
-        lastHarborTick = now
+    if CFG.AutoHarbor and (now - TIMERS.lastHarborTick >= 5.0) then
+        TIMERS.lastHarborTick = now
         pcall(function()
             Library.Remote:Fire("ExpeditionSystem", "Claim", "Harbor")
             Library.Remote:Fire("ExpeditionSystem", "Start", "Harbor")
@@ -2743,59 +3819,58 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
     end
 
     -- Auto Collect Commandments
-    if CFG.AutoCommandments and (now - lastCommandmentTick >= 2.0) then
-        lastCommandmentTick = now
+    if CFG.AutoCommandments and (now - TIMERS.lastCommandmentTick >= 2.0) then
+        TIMERS.lastCommandmentTick = now
         pcall(function()
             Library.Remote:Fire("SpawnItemSystem", "CollectAll")
         end)
     end
-
-
 
     -- Auto Marine Invasion
     if CFG.AutoMarineInvasion then
         handleAutoMarineInvasion(now)
     end
 
-    -- All selected systems share the single-level upgrade engine.
+    -- Shared global upgrade scheduler
     handleAutoGlobalUpgrades(now)
 
     -- Time Trial Upgrades & Shop
-    if CFG.AutoUpgradeTT and (now - lastTTUpgrade >= 0.45) then
-        lastTTUpgrade = now
-        doTimeTrialUpgrade(now)
+    if CFG.AutoUpgradeTT and (now - TIMERS.lastTTUpgrade >= 0.45) then
+        TIMERS.lastTTUpgrade = now
+        doTimeTrialUpgrade()
     end
-    if CFG.AutoBuyTTShop and (now - lastTTShopBuy >= 3.0) then
-        lastTTShopBuy = now
+    if CFG.AutoBuyTTShop and (now - TIMERS.lastTTShopBuy >= 3.0) then
+        TIMERS.lastTTShopBuy = now
         doTimeTrialShopBuy()
     end
-    if CFG.AutoBuyPirateShop and (now - lastPirateShopBuy >= 3.0) then
-        lastPirateShopBuy = now
+    if CFG.AutoBuyPirateShop and (now - TIMERS.lastPirateShopBuy >= 3.0) then
+        TIMERS.lastPirateShopBuy = now
         doPirateShopBuy()
     end
 
     -- Merge & Crafting
-    if CFG.AutoMergeAll and (now - lastMerge >= 2.0) then
-        lastMerge = now
+    if CFG.AutoMergeAll and (now - TIMERS.lastMerge >= 2.0) then
+        TIMERS.lastMerge = now
         doMergeAll()
     end
-    if CFG.AutoCraft and (now - lastMerge >= 3.0) then
+    if CFG.AutoCraft and (now - TIMERS.lastCraft >= 3.0) then
+        TIMERS.lastCraft = now
         doAutoCraft()
     end
 
     -- Equip Best
-    if (CFG.AutoEquipBest or CFG.EquipBestAvatar or CFG.EquipBestWeapon or CFG.EquipBestTitle) and (now - lastEquipBest >= 3.0) then
-        lastEquipBest = now
+    if (CFG.AutoEquipBest or CFG.EquipBestAvatar or CFG.EquipBestWeapon or CFG.EquipBestTitle) and (now - TIMERS.lastEquipBest >= 3.0) then
+        TIMERS.lastEquipBest = now
         doEquipBestCategories()
     end
 
     -- Auto Claims
-    if CFG.AutoClaimAll and (now - lastClaim >= 5.0) then
-        lastClaim = now
+    if CFG.AutoClaimAll and (now - TIMERS.lastClaim >= 5.0) then
+        TIMERS.lastClaim = now
         doClaimAll()
     end
-    if CFG.AutoClaimLikeRewards and (now - lastLikeClaim >= 10.0) then
-        lastLikeClaim = now
+    if CFG.AutoClaimLikeRewards and (now - TIMERS.lastLikeClaim >= 10.0) then
+        TIMERS.lastLikeClaim = now
         doClaimLikeRewards()
     end
 
@@ -2804,23 +3879,37 @@ _G.AnimeBreaker_HeartbeatConnection = RunService.Heartbeat:Connect(function()
         or CFG.AutoDeleteAvatars or CFG.AutoDeleteAccessories or CFG.AutoDeleteWarriors
         or CFG.AutoDeleteMounts or CFG.AutoDeleteJewels or CFG.AutoSell
 
-    if anyCleanEnabled and (now - lastSell >= 2.0) then
-        lastSell = now
+    if anyCleanEnabled and (now - TIMERS.lastSell >= 2.0) then
+        TIMERS.lastSell = now
         doAutoDelete()
+        if CFG.AutoSell then doAutoSell() end
     end
 end)
 
 -- ══════════════════════════════════════════════════════════
--- AXELUI SETUP
--- ══════════════════════════════════════════════════════════
 
--- ══════════════════════════════════════════════════════════
--- CONFIGURATION MANAGER ENGINE (SAVE / AUTO-LOAD / LOAD / CREATE / DELETE)
--- ══════════════════════════════════════════════════════════
-local AxelHubUI
+-- Profiles and runtime synchronization
 local CONFIG_FOLDER = "AnimeBreakerConfigs"
 if makefolder and isfolder and not isfolder(CONFIG_FOLDER) then
     pcall(makefolder, CONFIG_FOLDER)
+end
+
+local function syncRuntimeSettings()
+    normalizeUpgradeSystems()
+    table.clear(UpgradeRequestState)
+    CFG.DeleteRaritySelection = CFG.DeleteRaritySelection or {}
+    for category, rarities in pairs(RarityToggles) do
+        local selected = CFG.DeleteRaritySelection[category]
+        if type(selected) ~= "table" then
+            selected = {"Common", "Rare"}
+            CFG.DeleteRaritySelection[category] = selected
+        end
+        for _, rarity in ipairs(ALL_RARITY_NAMES) do
+            rarities[rarity] = isItemInList(selected, rarity)
+        end
+    end
+    if CFG.NoClip then enableNoClip() else disableNoClip() end
+    if AxelHubUI then AxelHubUI:SyncConfig() end
 end
 
 local function getSavedConfigsList()
@@ -2845,7 +3934,7 @@ local function saveConfigFile(name)
     local ok, data = pcall(function() return HttpService:JSONEncode(CFG) end)
     if ok and data then
         pcall(writefile, filePath, data)
-        print("[cook45] Config successfully saved to " .. filePath)
+        print("[Axel Hub] Config successfully saved to " .. filePath)
     end
 end
 
@@ -2861,8 +3950,7 @@ local function loadConfigFile(name)
         for k, v in pairs(decoded) do
             CFG[k] = v
         end
-        normalizeUpgradeSystems()
-        if AxelHubUI then AxelHubUI:SyncConfig() end
+        syncRuntimeSettings()
         print("[Axel Hub] Config loaded from " .. filePath)
     end
 end
@@ -2873,23 +3961,26 @@ local function deleteConfigFile(name)
     local filePath = CONFIG_FOLDER .. "/" .. name .. ".json"
     if isfile and isfile(filePath) then
         pcall(delfile, filePath)
-        print("[cook45] Config deleted: " .. filePath)
+        print("[Axel Hub] Config deleted: " .. filePath)
     end
 end
 
 local function checkAutoLoadConfig()
-    if not (readfile and isfile and CFG.AutoLoadConfig) then return end
+    if not (readfile and isfile) then return end
     local autoFile = CONFIG_FOLDER .. "/_autoload.txt"
     if isfile(autoFile) then
-        local ok, cName = pcall(readfile, autoFile)
-        if ok and cName and cName ~= "" then
-            loadConfigFile(cName:gsub("%s+", ""))
+        local ok, name = pcall(readfile, autoFile)
+        if ok and name and name ~= "" then
+            loadConfigFile(name)
+            CFG.SelectedConfigName = name
+            CFG.AutoLoadConfig = true
             return
         end
     end
-    loadConfigFile("default")
+    if CFG.AutoLoadConfig then loadConfigFile("default") end
 end
 pcall(checkAutoLoadConfig)
+
 
 -- Bundled AxelUI: a single file with no remote UI loader.
 local AxelUI = (function()
@@ -7613,61 +8704,13 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
         ["Player & Server"] = { "Player & Server", "Movement and session tools" },
         Configuration = { "Configuration", "Profiles and saved settings" },
     }
-    local titles = {
-        ["Auto Farm (TP to Enemy)"] = "Smart Enemy Farm",
-        ["Auto Click (Spam Attack)"] = "Precision Auto Attack",
-        ["Click Delay (s × 100)"] = "Attack Interval (× 0.01s)",
-        ["Auto Target Enemy"] = "Smart Target Selection",
-        ["Target Monster Filter (Multi-Select)"] = "Enemy Selection",
-        ["Auto Farm Index (Missing Avatars)"] = "Missing Avatar Index Farm",
-        ["Auto Go New Area"] = "New Area Progression",
-        ["Auto Break Wall Gate"] = "Wall Gate Progression",
-        ["Auto Time Trial Loop"] = "Time Trial Cycle",
-        ["Auto Raid Loop"] = "Raid Cycle",
-        ["Auto Join Portal by Tier"] = "Tier Based Portal Farm",
-        ["Auto Marine Invasion"] = "Marine Invasion Cycle",
-        ["Balanced System Unlocker (Round-Robin)"] = "Balanced System Unlocker",
-        ["Priority Order Breakdown"] = "Activity Priority",
-        ["TP to Target Enemy NOW"] = "Teleport to Locked Target",
-        ["Cast Skill NOW"] = "Cast Equipped Skill",
-        ["Break / Click Wall NOW"] = "Break Current Wall",
-        ["Check & Claim Quests NOW"] = "Check and Claim Quests",
-        ["Claim All Rewards NOW"] = "Claim Available Rewards",
-        ["Redeem All Known Codes"] = "Redeem Available Codes",
-        ["Redeem All Promo Codes"] = "Redeem Available Codes",
-        ["Player Movement & Hacks"] = "Player Movement",
-        ["Player Stats"] = "Live Player Stats",
-        ["Current Quest"] = "Quest Progress",
-        ["New Config Name"] = "New Profile Name",
-        ["Auto Load Config on Startup"] = "Load Profile at Startup",
-    }
-    local descriptions = {
-        ["Auto Farm (TP to Enemy)"] = "Keeps a target locked until defeat, then selects the next enemy.",
-        ["Auto Click (Spam Attack)"] = "Attacks the current target at your selected interval.",
-        ["Click Delay (s × 100)"] = "Set the attack interval: 5 means 0.05 seconds.",
-        ["Auto Target Enemy"] = "Chooses an available enemy in the current or latest area.",
-        ["Auto Farm Index (Missing Avatars)"] = "Farms enemies that drop avatars missing from your index.",
-        ["Auto Go New Area"] = "Moves your farm to the newest unlocked area.",
-        ["Auto Break Wall Gate"] = "Breaks the next wall to continue world progression.",
-        ["Auto Quests (Accept & Complete)"] = "Accepts, progresses and claims quests while enabled.",
-        ["Auto Time Trial Loop"] = "Queues available trials and clears stages until the exit condition.",
-        ["Auto Raid Loop"] = "Runs raid rooms, collects rewards and repeats.",
-        ["Auto Join Portal by Tier"] = "Enters portals that match your chosen tier.",
-        ["Auto Marine Invasion"] = "Joins the invasion, clears enemies and exits when complete.",
-        ["Balanced System Unlocker (Round-Robin)"] = "Rotates affordable unlocks across your progression systems.",
-        ["Auto Return Home"] = "Returns immediately after a completed raid or trial.",
-        ["Auto Claim All"] = "Claims available achievements, dailies, chests and passes.",
-        ["Redeem All Promo Codes"] = "Attempts each saved promotional code once.",
-        ["Redeem All Known Codes"] = "Attempts each saved promotional code once.",
-    }
-
     local function titleFor(data)
         local original = tostring(data.Title or data.Name or "Feature")
-        return titles[original] or original:gsub(" NOW$", ""):gsub("1%-Click", "Quick")
+        return original
     end
     local function descFor(data)
         local original = tostring(data.Title or data.Name or "")
-        local description = descriptions[original] or data.Desc or ""
+        local description = data.Desc or ""
         return description ~= "" and tostring(description) or nil
     end
     local function configValue(path)
@@ -7840,6 +8883,14 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
         originalUnload(self)
     end
 
+    local function controlCallback(ui, callback)
+        if type(callback) ~= "function" then return nil end
+        return function(value)
+            local ok, reason = pcall(callback, value)
+            ui:SyncConfig()
+            if not ok then raw:Notify("Action Failed", tostring(reason), "warning") end
+        end
+    end
     local tabMethods = {}
     function ui:Tab(data)
         local info = tabInfo[data.Title] or { data.Title, "Premium features" }
@@ -7864,12 +8915,12 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
     end
     function tabMethods:Button(data)
         return self:CurrentSection():AddButton({ Name = titleFor(data), Description = descFor(data),
-            Icon = "check", Callback = data.Callback })
+            Icon = "check", Callback = controlCallback(self.UI, data.Callback) })
     end
     function tabMethods:Toggle(data)
         local handle = self:CurrentSection():AddToggle({ Name = titleFor(data),
             Description = descFor(data), Default = data.Value == true,
-            Callback = data.Callback })
+            Callback = controlCallback(self.UI, data.Callback) })
         table.insert(self.UI.ToggleEntries, { Handle = handle, ConfigKey = data.ConfigKey })
         table.insert(self.UI.Controls, { Handle = handle, ConfigKey = data.ConfigKey })
         return handle
@@ -7878,14 +8929,14 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
         local range = data.Value or {}
         local handle = self:CurrentSection():AddSlider({ Name = titleFor(data),
             Description = descFor(data), Min = range.Min, Max = range.Max,
-            Default = range.Default, Step = data.Step, Callback = data.Callback })
+            Default = range.Default, Step = data.Step, Callback = controlCallback(self.UI, data.Callback) })
         table.insert(self.UI.Controls, { Handle = handle, ConfigKey = data.ConfigKey,
-            Transform = data.Title == "Click Delay (s × 100)" and 100 or nil })
+            Transform = data.ConfigKey == "ClickDelay" and 100 or nil })
         return handle
     end
     function tabMethods:Dropdown(data)
         local params = { Name = titleFor(data), Description = descFor(data),
-            Options = data.Values, Default = data.Value, Callback = data.Callback }
+            Options = data.Values, Default = data.Value, Callback = controlCallback(self.UI, data.Callback) }
         local section = self:CurrentSection()
         local handle = data.Multi and section:AddMultiDropdown(params) or section:AddDropdown(params)
         function handle:Refresh(values) self:SetOptions(values) end
@@ -7895,7 +8946,7 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
     function tabMethods:Input(data)
         return self:CurrentSection():AddInput({ Name = titleFor(data),
             Description = descFor(data), Default = data.Default, Placeholder = data.Placeholder,
-            Callback = data.Callback })
+            Callback = controlCallback(self.UI, data.Callback) })
     end
     function ui:SyncConfig()
         for _, entry in ipairs(self.Controls) do
@@ -7905,6 +8956,9 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
                 entry.Handle:Set(value, true)
             end
         end
+    end
+    function ui:Notify(data)
+        raw:Notify(data.Title or "Axel Hub", data.Description or data.Desc or "", "success")
     end
     function ui:FinishLoading()
         if self.Ready or raw._destroyed then return end
@@ -7966,7 +9020,7 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
     return ui
 end
 
-local Window = createAxelAnimeBreakerUI(
+Window = createAxelAnimeBreakerUI(
     AxelUI, CFG, function() return Library end, getCurrentMap, getHighestUnlockedMap,
     function() return currentLockedTargetUID end,
     function()
@@ -7975,12 +9029,20 @@ local Window = createAxelAnimeBreakerUI(
             _G.AnimeBreaker_HeartbeatConnection = nil
         end
         disableNoClip()
+        for _, connection in ipairs(_G.AnimeBreaker_Connections or {}) do
+            pcall(function() connection:Disconnect() end)
+        end
+        _G.AnimeBreaker_Connections = {}
         for _, key in ipairs({ "AnimeBreaker_AntiAFKConnection", "AnimeBreaker_RejoinConnection" }) do
             if _G[key] then _G[key]:Disconnect(); _G[key] = nil end
         end
     end
 )
 AxelHubUI = Window
+if getgenv then
+    getgenv()._AnimeBreakerCleanup = function() Window.Raw:Unload() end
+end
+syncRuntimeSettings()
 
 if lp then
     _G.AnimeBreaker_AntiAFKConnection = lp.Idled:Connect(function()
@@ -8000,32 +9062,37 @@ if lp then
     end)
 end
 
-local TabDash = Window:Tab({ Title = "Dashboard", Icon = "layout-dashboard" })
-do
-    TabDash:Section({ Title = "Live Player Tracker" })
+
+local Tabs = {}
+
+Tabs.Dash = function(win)
+    local TabDash = win:Tab({ Title = "Dashboard", Icon = "layout-dashboard" })
+    TabDash:Section({ Title = "Player Overview" })
     local statPara = TabDash:Paragraph({
-        Title = "Player Stats",
+        Title = "Live Player Stats",
         Desc = "Loading player metrics..."
     })
 
     task.spawn(function()
-        while task.wait(0.5) do
+        while not win.Closed and task.wait(0.5) do
             local pd = Library and Library.PlayerData
             local items = pd and pd.Items or {}
             local gold = pd and pd.Gold or items["Gold"] or 0
             local energy = pd and pd.Energy or items["Energy"] or 0
             local curMap = getCurrentMap()
             local rank = (pd and pd.Rebirth and pd.Rebirth.Rank_Energy) or (pd and pd.Rank) or 1
+            local coveredStr = (#currentCoveredTargetUIDs > 0) and string.format(" (%d Covered)", #currentCoveredTargetUIDs) or ""
             statPara:SetDesc(string.format(
-                "Player: %s  |  Map: %s\nGold: %s  |  Energy: %s  |  Rank: %s\nHighest Map: %s  |  Locked Target: %s",
+                "Player: %s  |  Map: %s\nGold: %s  |  Energy: %s  |  Rank: %s\nHighest Map: %s  |  Locked Target: %s%s",
                 lp.Name, curMap, tostring(gold), tostring(energy), tostring(rank),
                 getHighestUnlockedMap(),
-                tostring(currentLockedTargetUID or "None (Searching...)")
+                tostring(currentLockedTargetUID or "None (Searching...)"),
+                coveredStr
             ))
         end
     end)
 
-    TabDash:Section({ Title = "Active Quest Status" })
+    TabDash:Section({ Title = "Quest Progress" })
     local qPara = TabDash:Paragraph({
         Title = "Current Quest",
         Desc = "Tracking quests..."
@@ -8082,41 +9149,45 @@ do
     end)
 
     TabDash:Button({
-        Title = "Check & Claim Quests NOW",
-        Desc = "Immediately checks quest progress and claims completed rewards",
+        Title = "Process Quests",
+        Desc = "Checks quests, processes available objectives and claims completed rewards once.",
         Callback = doAutoQuests
     })
 
-    TabDash:Section({ Title = "Quick Combat Actions" })
+    TabDash:Section({ Title = "Quick Actions" })
     TabDash:Button({
-        Title = "TP to Target Enemy NOW",
-        Desc = "Teleports directly in front of the active locked monster",
+        Title = "Teleport to Target",
+        Desc = "Moves to the selected enemy or the best attack position for a group.",
         Callback = function()
-            local uid, part = selectTargetEnemy()
-            teleportToTarget(part, uid)
+            local uid, part, model, optPos, coveredUIDs = selectTargetEnemy()
+            if optPos and coveredUIDs and #coveredUIDs > 0 then
+                teleportToCombat(optPos, coveredUIDs, uid)
+            elseif part and uid then
+                teleportToTarget(part, uid)
+            end
         end
     })
     TabDash:Button({
-        Title = "Cast Skill NOW",
-        Desc = "Manually triggers ability skill execution",
+        Title = "Cast Skill",
+        Desc = "Uses the equipped skill on the current target or group.",
         Callback = function()
-            local skillTgt = currentLockedTargetUID and { currentLockedTargetUID } or Library.Target
+            local skillTgt = (#currentCoveredTargetUIDs > 0 and currentCoveredTargetUIDs) or (currentLockedTargetUID and { currentLockedTargetUID }) or Library.Target
             Library.Remote:Fire("ClickSystem", "CastSkill", skillTgt)
         end
     })
     TabDash:Button({
-        Title = "Break / Click Wall NOW",
-        Desc = "Teleports to current world wall and fires wall click",
+        Title = "Attack World Gate",
+        Desc = "Moves to the current world gate and attacks it once.",
         Callback = doAutoBreakWall
     })
     TabDash:Button({
-        Title = "Claim All Rewards NOW",
-        Desc = "Claims Achievements, Dailies, Battlepass, Likes and Chests",
+        Title = "Claim Available Rewards",
+        Desc = "Claims available rewards from the supported reward systems.",
         Callback = doClaimAll
     })
     TabDash:Button({
-        Title = "Redeem All Known Codes",
-        Desc = "Redeems all active promo codes for free boosts",
+        Title = "Redeem Saved Codes",
+        Desc = "Attempts each promo code included in this script. Expired codes may be rejected.",
         Callback = doRedeemAllCodes
     })
 end
@@ -8124,39 +9195,25 @@ end
 -- ══════════════════════════════════════════════════════════
 -- TAB 2: 🔀 ACTIVITY ORDER (PRIORITY HIERARCHY)
 -- ══════════════════════════════════════════════════════════
-local TabOrder = Window:Tab({ Title = "Activity Order", Icon = "list-ordered" })
-do
-    TabOrder:Section({ Title = "Execution Priority Hierarchy" })
+Tabs.Order = function(win)
+    local TabOrder = win:Tab({ Title = "Activity Order", Icon = "list-ordered" })
+    TabOrder:Section({ Title = "Activity Priority" })
     TabOrder:Paragraph({
-        Title = "Priority Order Breakdown",
-        Desc = "1. Time Trial Dungeon: Clears hallway dungeon until target stage or completion\n2. Auto Raid: Safe entry, ticket farm, room clearance, custom room exit\n3. Auto Portal: Uses S > A > B > C rank portals and auto farms dungeon\n4. Normal Farm / Wall / Quests: Standard continuous progression"
-    })
-
-    TabOrder:Section({ Title = "Balanced System Unlocker" })
-    TabOrder:Toggle({
-        Title = "Balanced System Unlocker (Round-Robin)",
-        Desc = "Rotates unlocking Race, Warrior, Weapon, Hero Passive without exhausting money",
-        ConfigKey = "BalancedUnlocker",
-        Value = CFG.BalancedUnlocker,
-        Callback = function(v) CFG.BalancedUnlocker = v end
-    })
-    TabOrder:Button({
-        Title = "Unlock All Available Systems NOW",
-        Desc = "Immediately checks affordable system unlocks and executes them",
-        Callback = handleAutoUnlockSystems
+        Title = "Automation Order",
+        Desc = "1. Time Trial\n2. Raid\n3. Portal\n4. World farming, gates and quests\nHigher priority activities pause normal world farming."
     })
 end
 
 -- ══════════════════════════════════════════════════════════
 -- TAB 3: ⚔️ FARMING (STICKY TARGET LOCKING + INTERACTIVE SLIDERS)
 -- ══════════════════════════════════════════════════════════
-local TabFarm = Window:Tab({ Title = "Farming", Icon = "swords" })
-do
+Tabs.Farm = function(win)
+    local TabFarm = win:Tab({ Title = "Farming", Icon = "swords" })
     TabFarm:Section({ Title = "Combat Controls" })
     TabFarm:Toggle({
-        Title = "Auto Farm (TP to Enemy)",
-        Desc = "Locks onto target enemy until DEAD, then smoothly moves to next",
         ConfigKey = "AutoFarm",
+        Title = "Auto Farm Enemies",
+        Desc = "Moves into attack range and keeps enemies targeted until defeated.",
         Value = CFG.AutoFarm,
         Callback = function(v)
             CFG.AutoFarm = v
@@ -8164,40 +9221,40 @@ do
         end
     })
     TabFarm:Toggle({
-        Title = "Auto Click (Spam Attack)",
-        Desc = "Fires click attack executions continuously",
         ConfigKey = "AutoClick",
+        Title = "Auto Attack",
+        Desc = "Attacks the current target or group at the selected interval.",
         Value = CFG.AutoClick,
         Callback = function(v) CFG.AutoClick = v end
     })
     TabFarm:Slider({
-        Title = "Click Delay (s × 100)",
-        Desc = "Adjust click speed (1 = 0.01s, 5 = 0.05s, 20 = 0.20s)",
-        Step = 1,
         ConfigKey = "ClickDelay",
+        Title = "Attack Interval (× 0.01s)",
+        Desc = "5 = 0.05 seconds between attacks. A higher value attacks less often.",
+        Step = 1,
         Value = { Min = 1, Max = 50, Default = math.floor(CFG.ClickDelay * 100) },
         Callback = function(v) CFG.ClickDelay = v / 100 end
     })
     TabFarm:Toggle({
-        Title = "Auto Target Enemy",
-        Desc = "Locks onto best available target in current or newest zone",
         ConfigKey = "AutoTarget",
+        Title = "Auto Target Enemies",
+        Desc = "Selects available enemies in your farming area.",
         Value = CFG.AutoTarget,
         Callback = function(v) CFG.AutoTarget = v end
     })
     TabFarm:Toggle({
-        Title = "Auto Cast Skill",
-        Desc = "Automatically casts equipped hero skills on cooldown",
         ConfigKey = "AutoCastSkill",
+        Title = "Auto Cast Skill",
+        Desc = "Casts the equipped skill on the current target or group.",
         Value = CFG.AutoCastSkill,
         Callback = function(v) CFG.AutoCastSkill = v end
     })
     TabFarm:Dropdown({
-        Title = "Target Monster Filter (Multi-Select)",
-        Desc = "Select one or multiple monsters to farm",
+        ConfigKey = "TargetMonsterFilterMulti",
+        Title = "Target Enemies",
+        Desc = "Choose one or more enemies. Select All to include every enemy.",
         Multi = true,
         Values = ALL_ENEMY_OPTIONS,
-        ConfigKey = "TargetMonsterFilterMulti",
         Value = CFG.TargetMonsterFilterMulti or {"All"},
         Callback = function(v)
             CFG.TargetMonsterFilterMulti = v
@@ -8205,16 +9262,31 @@ do
         end
     })
 
-    TabFarm:Section({ Title = "Auto Farm Index (Missing Avatars)" })
+    TabFarm:Section({ Title = "Avatar Index" })
     TabFarm:Toggle({
-        Title = "Auto Farm Index (Missing Avatars)",
-        Desc = "Warps to chosen map and targets monsters dropping Avatars still missing in Index",
         ConfigKey = "AutoIndexFarm",
+        Title = "Auto Complete Avatar Index",
+        Desc = "On: farms missing avatars. Off: stops farming and attacks, then clears Index targets.",
         Value = CFG.AutoIndexFarm,
         Callback = function(v)
             CFG.AutoIndexFarm = v
-            currentLockedTargetUID = nil
-            if v then
+            if getgenv then
+                getgenv()._CurrentLockedUID = nil
+                getgenv()._CurrentCoveredUIDs = {}
+            end
+            if not v then
+                -- ปิด → หยุดฟาร์มทุกอย่างทันที
+                CFG.AutoFarm = false
+                CFG.AutoClick = false
+                currentLockedTargetUID = nil
+                currentCoveredTargetUIDs = {}
+                lastTeleportedUID = nil
+                if Library then Library.Target = {} end
+            else
+                -- เปิด → เริ่มฟาร์ม index
+                currentLockedTargetUID = nil
+                currentCoveredTargetUIDs = {}
+                lastTeleportedUID = nil
                 CFG.AutoFarm = true
                 CFG.AutoClick = true
                 local targetMap = CFG.IndexFarmWorld or "Current Map"
@@ -8227,10 +9299,10 @@ do
         end
     })
     TabFarm:Dropdown({
-        Title = "Index Map Selection",
-        Desc = "Select world to warp & farm missing avatar index",
-        Values = {"Current Map", "DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
         ConfigKey = "IndexFarmWorld",
+        Title = "Avatar Index World",
+        Desc = "Choose the world to visit and farm for missing avatars.",
+        Values = {"Current Map", "DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
         Value = CFG.IndexFarmWorld or "Current Map",
         Callback = function(v)
             CFG.IndexFarmWorld = v
@@ -8243,11 +9315,11 @@ do
         end
     })
 
-    TabFarm:Section({ Title = "Zone Progression & Wall Breaking" })
+    TabFarm:Section({ Title = "World Progression" })
     TabFarm:Toggle({
-        Title = "Auto Go New Area",
-        Desc = "ON: Farm new unlocked area from lowest HP. OFF: Farm highest HP monster of old zone!",
         ConfigKey = "AutoGoNewArea",
+        Title = "Follow New Areas",
+        Desc = "On: farm the newest unlocked area. Off: stay in the current area.",
         Value = CFG.AutoGoNewArea,
         Callback = function(v)
             CFG.AutoGoNewArea = v
@@ -8255,9 +9327,9 @@ do
         end
     })
     TabFarm:Toggle({
-        Title = "Auto Break Wall Gate",
-        Desc = "Warp to latest area, break wall, and warp into newly unlocked area immediately!",
         ConfigKey = "AutoBreakWall",
+        Title = "Auto Break World Gates",
+        Desc = "Attacks the next gate and moves to the newly unlocked world.",
         Value = CFG.AutoBreakWall,
         Callback = function(v)
             CFG.AutoBreakWall = v
@@ -8272,35 +9344,35 @@ do
         end
     })
     TabFarm:Dropdown({
-        Title = "Wall Break Mode",
-        Desc = "Timed (switches between wall and mob farming) or Continuous",
-        Values = {"Timed", "Continuous"},
         ConfigKey = "WallBreakMode",
+        Title = "Gate Attack Mode",
+        Desc = "Timed alternates gate attacks with farming. Continuous keeps attacking the gate.",
+        Values = {"Timed", "Continuous"},
         Value = CFG.WallBreakMode,
         Callback = function(v) CFG.WallBreakMode = v end
     })
     TabFarm:Slider({
-        Title = "Wall Attack Duration (s)",
-        Desc = "Seconds spent attacking wall before retreating to farm",
-        Step = 5,
         ConfigKey = "WallAttackDuration",
+        Title = "Gate Attack Duration (s)",
+        Desc = "How long to attack the gate before returning to farm in Timed mode.",
+        Step = 5,
         Value = { Min = 5, Max = 180, Default = CFG.WallAttackDuration },
         Callback = function(v) CFG.WallAttackDuration = v end
     })
     TabFarm:Slider({
-        Title = "Farm Cooldown (s)",
-        Desc = "Seconds spent farming monsters before retrying wall",
-        Step = 10,
         ConfigKey = "WallFarmCooldown",
+        Title = "Farm Duration (s)",
+        Desc = "How long to farm between gate attacks in Timed mode.",
+        Step = 10,
         Value = { Min = 10, Max = 600, Default = CFG.WallFarmCooldown },
         Callback = function(v) CFG.WallFarmCooldown = v end
     })
 
     TabFarm:Section({ Title = "Auto Quests" })
     TabFarm:Toggle({
-        Title = "Auto Quests (Accept & Complete)",
-        Desc = "STRICT: If OFF, will NEVER accept quests, do objectives, or spin cards!",
         ConfigKey = "AutoQuests",
+        Title = "Auto Complete Quests",
+        Desc = "Accepts quests, progresses objectives and claims completed rewards.",
         Value = CFG.AutoQuests,
         Callback = function(v) CFG.AutoQuests = v end
     })
@@ -8309,13 +9381,13 @@ end
 -- ══════════════════════════════════════════════════════════
 -- TAB 4: ⏱️ EVENTS & RAIDS
 -- ══════════════════════════════════════════════════════════
-local TabEvents = Window:Tab({ Title = "Events & Raids", Icon = "clock" })
-do
-    TabEvents:Section({ Title = "Time Trial Dungeon Automation" })
+Tabs.Events = function(win)
+    local TabEvents = win:Tab({ Title = "Events & Raids", Icon = "clock" })
+    TabEvents:Section({ Title = "Time Trial" })
     TabEvents:Toggle({
-        Title = "Auto Time Trial Loop",
-        Desc = "Automatically joins open difficulties, sweeps mobs, and loops progression",
         ConfigKey = "AutoTimeTrialDungeon",
+        Title = "Auto Time Trial",
+        Desc = "Joins available trials, clears enemies and repeats using the selected difficulties.",
         Value = CFG.AutoTimeTrialDungeon,
         Callback = function(v)
             CFG.AutoTimeTrialDungeon = v
@@ -8325,11 +9397,11 @@ do
         end
     })
     TabEvents:Dropdown({
-        Title = "Difficulty Selection (Multi)",
-        Desc = "Choose difficulty tiers to automatically queue into",
+        ConfigKey = "TTDifficulties",
+        Title = "Trial Difficulties",
+        Desc = "Choose which difficulties to enter when their trial window opens.",
         Multi = true,
         Values = {"Easy", "Normal", "Hard"},
-        ConfigKey = "TTDifficulties",
         Value = CFG.TTDifficulties or (type(CFG.TTDifficulty) == "table" and CFG.TTDifficulty) or { "Easy" },
         Callback = function(v)
             CFG.TTDifficulties = v
@@ -8337,23 +9409,23 @@ do
         end
     })
     TabEvents:Toggle({
-        Title = "Target Stage Exit",
-        Desc = "Automatically leaves time trial upon reaching specified stage",
         ConfigKey = "TTCustomExitStage",
+        Title = "Exit at Selected Stage",
+        Desc = "Leaves the trial when the chosen exit stage is reached.",
         Value = CFG.TTCustomExitStage,
         Callback = function(v) CFG.TTCustomExitStage = v end
     })
     TabEvents:Slider({
-        Title = "Target Exit Stage (1-50)",
-        Desc = "Stage number to trigger early dungeon exit",
-        Step = 1,
         ConfigKey = "TTExitStage",
+        Title = "Trial Exit Stage",
+        Desc = "Choose the stage at which Auto Time Trial should leave.",
+        Step = 1,
         Value = { Min = 1, Max = 50, Default = CFG.TTExitStage },
         Callback = function(v) CFG.TTExitStage = v end
     })
     TabEvents:Button({
-        Title = "Join Time Trial Instantly",
-        Desc = "Immediately teleports and launches highest ready difficulty tier",
+        Title = "Enter Time Trial",
+        Desc = "Joins a trial using the first selected difficulty.",
         Callback = function()
             local openDiff = getAvailableTimeTrialDiff() or (getSelectedTTDifficulties()[1]) or "Easy"
             doJoinTimeTrial(openDiff)
@@ -8364,17 +9436,17 @@ do
     })
     TabEvents:Button({
         Title = "Leave Time Trial",
-        Desc = "Safely exits current active Time Trial session",
+        Desc = "Exits the current trial.",
         Callback = function()
             Library.Remote:Fire("GamemodeSystem", "Quit", true)
         end
     })
 
-    TabEvents:Section({ Title = "Infinite Raid Automation" })
+    TabEvents:Section({ Title = "Raids" })
     TabEvents:Toggle({
-        Title = "Auto Raid Loop",
-        Desc = "Automatically enters raid, sweeps rooms, auto-collects rewards, and loops",
         ConfigKey = "AutoRaid",
+        Title = "Auto Raid",
+        Desc = "Creates raids, clears rooms and repeats in the chosen world.",
         Value = CFG.AutoRaid,
         Callback = function(v)
             CFG.AutoRaid = v
@@ -8391,10 +9463,10 @@ do
         end
     })
     TabEvents:Dropdown({
-        Title = "Raid Dimension / World",
-        Desc = "Target world map for raid dungeon battles",
-        Values = {"DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
         ConfigKey = "RaidTargetMap",
+        Title = "Raid World",
+        Desc = "Choose the world used for raid entry and ticket farming.",
+        Values = {"DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
         Value = CFG.RaidTargetMap,
         Callback = function(v)
             CFG.RaidTargetMap = v
@@ -8407,9 +9479,9 @@ do
         end
     })
     TabEvents:Toggle({
-        Title = "Auto Farm Raid Tickets",
-        Desc = "Warps to target world and farms ticket-dropping sub-bosses when out of tickets",
         ConfigKey = "AutoFarmTicketIfNone",
+        Title = "Auto Farm Raid Tickets",
+        Desc = "Farms ticket enemies when you run out. Off: normal farming continues while raids wait.",
         Value = CFG.AutoFarmTicketIfNone,
         Callback = function(v)
             CFG.AutoFarmTicketIfNone = v
@@ -8431,30 +9503,30 @@ do
         end
     })
     TabEvents:Toggle({
-        Title = "Instant Return (Skip Results)",
-        Desc = "Instantly clicks Return on Results screen to skip the 10-second countdown",
         ConfigKey = "AutoReturnHome",
+        Title = "Return After Results",
+        Desc = "Returns to the world when a raid or trial result screen appears.",
         Value = CFG.AutoReturnHome,
         Callback = function(v) CFG.AutoReturnHome = v end
     })
     TabEvents:Toggle({
-        Title = "Custom Stage Exit",
-        Desc = "Leaves raid early once reaching target room stage",
         ConfigKey = "RaidCustomExitRoom",
+        Title = "Exit at Selected Room",
+        Desc = "Leaves the raid when the chosen exit room is reached.",
         Value = CFG.RaidCustomExitRoom,
         Callback = function(v) CFG.RaidCustomExitRoom = v end
     })
     TabEvents:Slider({
-        Title = "Target Exit Room (1-30)",
-        Desc = "Room stage number to exit raid back to world",
-        Step = 1,
         ConfigKey = "RaidExitRoom",
+        Title = "Raid Exit Room",
+        Desc = "Choose the room at which Auto Raid should leave.",
+        Step = 1,
         Value = { Min = 1, Max = 30, Default = CFG.RaidExitRoom },
         Callback = function(v) CFG.RaidExitRoom = v end
     })
     TabEvents:Button({
-        Title = "Launch Raid Instantly",
-        Desc = "Creates and launches target raid session immediately",
+        Title = "Start Raid",
+        Desc = "Enables farming and attacks, then creates and starts a raid in the selected world.",
         Callback = function()
             CFG.AutoRaid = true
             CFG.AutoFarm = true
@@ -8468,55 +9540,55 @@ do
         end
     })
     TabEvents:Button({
-        Title = "Leave Raid Dungeon",
-        Desc = "Safely exits current active raid session",
+        Title = "Leave Raid",
+        Desc = "Exits the current raid.",
         Callback = function()
             Library.Remote:Fire("GamemodeSystem", "Quit", true)
         end
     })
 
-    TabEvents:Section({ Title = "Auto Portal Dungeons" })
+    TabEvents:Section({ Title = "Portals" })
     TabEvents:Toggle({
-        Title = "Auto Join Portal by Tier",
-        Desc = "Uses portal items and enters portal dungeons based on tier",
         ConfigKey = "AutoPortal",
+        Title = "Auto Portal Dungeons",
+        Desc = "Uses available portal items that match the selected tier.",
         Value = CFG.AutoPortal,
         Callback = function(v) CFG.AutoPortal = v end
     })
     TabEvents:Dropdown({
-        Title = "Portal Tier Selection",
-        Desc = "Select tier or 'All'",
-        Values = {"All", "Rank C", "Rank B", "Rank A", "Rank S"},
         ConfigKey = "PortalSelectedTier",
+        Title = "Portal Tier",
+        Desc = "Choose a portal tier, or All to use any available tier.",
+        Values = {"All", "Rank C", "Rank B", "Rank A", "Rank S"},
         Value = CFG.PortalSelectedTier,
         Callback = function(v) CFG.PortalSelectedTier = v end
     })
-    TabEvents:Section({ Title = "Auto Marine Invasion (1-Click Loop)" })
+    TabEvents:Section({ Title = "Marine Invasion" })
     TabEvents:Toggle({
-        Title = "Auto Marine Invasion",
-        Desc = "Auto checks window, enters Marine Invasion, clears mobs, auto leaves",
         ConfigKey = "AutoMarineInvasion",
+        Title = "Auto Marine Invasion",
+        Desc = "Enters available invasions and farms their enemies.",
         Value = CFG.AutoMarineInvasion,
         Callback = function(v) CFG.AutoMarineInvasion = v end
     })
     TabEvents:Dropdown({
-        Title = "Invasion Difficulty",
-        Desc = "Select difficulty tier",
-        Values = {"Easy", "Medium", "Hard", "Nightmare"},
         ConfigKey = "InvasionDifficulty",
+        Title = "Invasion Difficulty",
+        Desc = "Choose the difficulty used when entering Marine Invasion.",
+        Values = {"Easy", "Medium", "Hard", "Nightmare"},
         Value = CFG.InvasionDifficulty or "Easy",
         Callback = function(v) CFG.InvasionDifficulty = v end
     })
     TabEvents:Toggle({
-        Title = "Invasion Auto Leave",
-        Desc = "Automatically leaves invasion after completion / rewards",
         ConfigKey = "InvasionAutoLeave",
+        Title = "Leave Completed Invasions",
+        Desc = "Leaves Marine Invasion after its completion condition is reached.",
         Value = CFG.InvasionAutoLeave,
         Callback = function(v) CFG.InvasionAutoLeave = v end
     })
     TabEvents:Button({
-        Title = "Enter Marine Invasion NOW",
-        Desc = "Enters Marine Invasion event immediately",
+        Title = "Enter Marine Invasion",
+        Desc = "Enters Marine Invasion using the selected difficulty.",
         Callback = function()
             Library.Remote:Fire("GamemodeSystem", "Enter", "Invasion", "Marine Invasion", CFG.InvasionDifficulty or "Easy", true)
         end
@@ -8526,40 +9598,48 @@ end
 -- ══════════════════════════════════════════════════════════
 -- TAB 5: 🎲 SPINS & GACHA
 -- ══════════════════════════════════════════════════════════
-local TabSpins = Window:Tab({ Title = "Spins & Gacha", Icon = "sparkles" })
-do
-    TabSpins:Section({ Title = "Card / Egg Summon" })
-    TabSpins:Toggle({
-        Title = "Auto Summon Enabled",
-        Desc = "Continuously spins eggs or cards",
+Tabs.Spins = function(win)
+    local TabSpins = win:Tab({ Title = "Spins & Gacha", Icon = "sparkles" })
+    TabSpins:Section({ Title = "World Summons" })
+    _UI_TOGGLES["AutoSummon"] = TabSpins:Toggle({
         ConfigKey = "AutoSummon",
+        Title = "Auto Summon",
+        Desc = "Summons from the selected world and stops at the chosen rarity or higher.",
         Value = CFG.AutoSummon,
         Callback = function(v) CFG.AutoSummon = v end
     })
     TabSpins:Dropdown({
-        Title = "Summon World",
-        Desc = "Select banner world",
-        Values = {"DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
         ConfigKey = "SummonEgg",
+        Title = "Summon World",
+        Desc = "Choose the world banner to use for summons.",
+        Values = {"DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
         Value = CFG.SummonEgg,
         Callback = function(v) CFG.SummonEgg = v end
     })
     TabSpins:Dropdown({
-        Title = "Summon Type",
-        Desc = "Pet, Race or Eye Technique",
-        Values = {"Pet", "Race", "Eye Technique"},
         ConfigKey = "SummonType",
+        Title = "Summon Category",
+        Desc = "Choose the item category to summon.",
+        Values = {"Pet", "Race", "Eye Technique"},
         Value = CFG.SummonType,
         Callback = function(v) CFG.SummonType = v end
     })
+    TabSpins:Dropdown({
+        ConfigKey = "SummonStopRarity",
+        Title = "Summon Stop Rarity",
+        Desc = "Stops Auto Summon at this rarity or higher. Any keeps summoning.",
+        Values = {"Any", "Rare+", "Epic+", "Legendary+", "Mythical+", "Secret", "Broken", "Exclusive"},
+        Value = CFG.SummonStopRarity or "Mythical+",
+        Callback = function(v) CFG.SummonStopRarity = v end
+    })
     TabSpins:Button({
-        Title = "Summon 1x Fast",
-        Desc = "Spins selected banner 1 time",
+        Title = "Summon Once",
+        Desc = "Requests one summon from the selected world and category.",
         Callback = doAutoSummon
     })
     TabSpins:Button({
-        Title = "Summon 10x Fast",
-        Desc = "Spins selected banner 10 times in rapid succession",
+        Title = "Summon Ten Times",
+        Desc = "Requests ten summons from the selected world and category.",
         Callback = function()
             for i = 1, 10 do
                 doAutoSummon()
@@ -8568,174 +9648,329 @@ do
         end
     })
 
-    TabSpins:Section({ Title = "Race Spin (Stop by Rarity)" })
-    TabSpins:Toggle({
-        Title = "Auto Race Spin",
-        Desc = "Rerolls player race with RaceCoins until target rarity reached",
+    TabSpins:Section({ Title = "Race Banner" })
+    _UI_TOGGLES["AutoRaceSpin"] = TabSpins:Toggle({
         ConfigKey = "AutoRaceSpin",
+        Title = "Auto Race Spin",
+        Desc = "Rolls Race until the selected tier or higher is obtained.",
         Value = CFG.AutoRaceSpin,
         Callback = function(v) CFG.AutoRaceSpin = v end
     })
     TabSpins:Toggle({
-        Title = "Auto Unlock Race First (10k Gold)",
-        Desc = "Unlocks Race Gacha in DBZ before rolling",
         ConfigKey = "AutoUnlockRace",
+        Title = "Auto Unlock Race",
+        Desc = "Unlocks the Race system when its gold and world requirements are met.",
         Value = CFG.AutoUnlockRace,
         Callback = function(v) CFG.AutoUnlockRace = v end
     })
     TabSpins:Dropdown({
-        Title = "Race Stop Rarity",
-        Desc = "Stops spinning when race meets or exceeds rarity",
-        Values = ALL_RARITY_NAMES,
         ConfigKey = "RaceStopRarity",
+        Title = "Race Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = ALL_RARITY_NAMES,
         Value = CFG.RaceStopRarity,
         Callback = function(v) CFG.RaceStopRarity = v end
     })
 
     TabSpins:Section({ Title = "Titan Banner" })
-    TabSpins:Toggle({
-        Title = "Auto Titan Spin",
-        Desc = "Continuously spins Titan banner via remote",
+    _UI_TOGGLES["AutoTitanSpin"] = TabSpins:Toggle({
         ConfigKey = "AutoTitanSpin",
+        Title = "Auto Titan Spin",
+        Desc = "Rolls Titan until the selected tier or higher is obtained.",
         Value = CFG.AutoTitanSpin,
         Callback = function(v) CFG.AutoTitanSpin = v end
     })
     TabSpins:Toggle({
-        Title = "Auto Unlock Titan (10M Gold)",
-        Desc = "Unlocks Titan banner when player has 10M Gold (no forced farming)",
         ConfigKey = "AutoUnlockTitan",
+        Title = "Auto Unlock Titan",
+        Desc = "Unlocks the Titan system when its gold and world requirements are met.",
         Value = CFG.AutoUnlockTitan,
         Callback = function(v) CFG.AutoUnlockTitan = v end
     })
+    TabSpins:Dropdown({
+        ConfigKey = "TitanStopRarity",
+        Title = "Titan Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Armored Titan (Rare+)", "Beast Titan (Epic+)", "Colossal Titan (Legendary+)", "Attack Titan (Mythical+)", "Founding Titan (Secret)"},
+        Value = CFG.TitanStopRarity or "Founding Titan (Secret)",
+        Callback = function(v) CFG.TitanStopRarity = v end
+    })
 
-    TabSpins:Section({ Title = "Weapon & Hero Passive Spins (Auto-Lock)" })
-    TabSpins:Toggle({
-        Title = "Auto Weapon Summon (T1)",
-        Desc = "Spins Weapon T1 banner using WeaponCoinsT1",
+    TabSpins:Section({ Title = "Weapon T1 Banner" })
+    _UI_TOGGLES["AutoWeaponSummon"] = TabSpins:Toggle({
         ConfigKey = "AutoWeaponSummon",
+        Title = "Auto Weapon T1 Spin",
+        Desc = "Rolls Weapon T1 until the selected tier or higher is obtained.",
         Value = CFG.AutoWeaponSummon,
         Callback = function(v) CFG.AutoWeaponSummon = v end
     })
     TabSpins:Toggle({
-        Title = "Auto Unlock Weapon T1 First (10.93M Gold @ AOT)",
-        Desc = "Unlocks Gacha_Weapon_T1 when gold is reached",
         ConfigKey = "AutoUnlockWeapon",
+        Title = "Auto Unlock Weapon T1",
+        Desc = "Unlocks the Weapon T1 system when its gold and world requirements are met.",
         Value = CFG.AutoUnlockWeapon,
         Callback = function(v) CFG.AutoUnlockWeapon = v end
     })
-    TabSpins:Toggle({
-        Title = "Auto Weapon Passive Spin",
-        Desc = "Spins Weapon Passive in OnePiece (Auto-locks on target)",
-        ConfigKey = "AutoWeaponPassive",
-        Value = CFG.AutoWeaponPassive,
-        Callback = function(v) CFG.AutoWeaponPassive = v end
-    })
     TabSpins:Dropdown({
-        Title = "Target Weapon Passive",
-        Desc = "Select desired passive (auto-locks & stops spinning when hit)",
-        Values = {"Any", "Supreme Grade", "Black Blade", "Soul Breaker", "World Breaker", "Divine", "Cosmic", "Glitch", "Mastery", "Berserk", "Sharpness", "Executioner"},
-        ConfigKey = "TargetWeaponPassive",
-        Value = CFG.TargetWeaponPassive or "Any",
-        Callback = function(v) CFG.TargetWeaponPassive = v end
+        ConfigKey = "WeaponT1StopRarity",
+        Title = "Weapon T1 Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Rare+", "Epic+", "Legendary+", "Mythical+", "Secret"},
+        Value = CFG.WeaponT1StopRarity or "Mythical+",
+        Callback = function(v) CFG.WeaponT1StopRarity = v end
     })
-    TabSpins:Toggle({
-        Title = "Auto Hero Passive Spin",
-        Desc = "Spins Hero Passive with HeroPassiveCoins (Auto-locks on target)",
+
+    TabSpins:Section({ Title = "Hero Passive Banner" })
+    _UI_TOGGLES["AutoHeroPassive"] = TabSpins:Toggle({
         ConfigKey = "AutoHeroPassive",
+        Title = "Auto Hero Passive Spin",
+        Desc = "Rolls Hero Passive until the selected tier or higher is obtained.",
         Value = CFG.AutoHeroPassive,
         Callback = function(v) CFG.AutoHeroPassive = v end
     })
-    TabSpins:Dropdown({
-        Title = "Target Hero Passive",
-        Desc = "Select desired hero passive (auto-locks & stops spinning when hit)",
-        Values = {"Any", "Godly", "Secret", "Mythical", "Legendary", "Epic", "Golden", "Titan", "Shadow", "Speedster", "Overlord", "Immortal"},
-        ConfigKey = "TargetHeroPassive",
-        Value = CFG.TargetHeroPassive or "Any",
-        Callback = function(v) CFG.TargetHeroPassive = v end
-    })
     TabSpins:Toggle({
-        Title = "Auto Unlock Hero Passive First (87.48M Gold @ AOT)",
-        Desc = "Unlocks Gacha_Hero Passive when gold is reached",
         ConfigKey = "AutoUnlockHeroPassive",
+        Title = "Auto Unlock Hero Passive",
+        Desc = "Unlocks the Hero Passive system when its gold and world requirements are met.",
         Value = CFG.AutoUnlockHeroPassive,
         Callback = function(v) CFG.AutoUnlockHeroPassive = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "TargetHeroPassive",
+        Title = "Hero Passive Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Bone Breaker (Rare+)", "Wall Breaker (Epic+)", "Limit Breaker (Legendary+)", "Soul Breaker (Mythical+)", "World Breaker (Secret)"},
+        Value = CFG.TargetHeroPassive or "Soul Breaker (Mythical+)",
+        Callback = function(v) CFG.TargetHeroPassive = v end
+    })
+
+    TabSpins:Section({ Title = "Eye Technique Banner" })
+    _UI_TOGGLES["AutoEyeSpin"] = TabSpins:Toggle({
+        ConfigKey = "AutoEyeSpin",
+        Title = "Auto Eye Technique Spin",
+        Desc = "Rolls Eye Technique until the selected tier or higher is obtained.",
+        Value = CFG.AutoEyeSpin,
+        Callback = function(v) CFG.AutoEyeSpin = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockEye",
+        Title = "Auto Unlock Eye Technique",
+        Desc = "Unlocks the Eye Technique system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockEye,
+        Callback = function(v) CFG.AutoUnlockEye = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "EyeStopRarity",
+        Title = "Eye Technique Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Sharingan (Rare+)", "Mangekyou Sharingan (Epic+)", "Eternal Mangekyou Sharingan (Legendary+)", "Rinnegan (Mythical+)", "Rinne Sharingan (Secret)"},
+        Value = CFG.EyeStopRarity or "Rinnegan (Mythical+)",
+        Callback = function(v) CFG.EyeStopRarity = v end
+    })
+
+    TabSpins:Section({ Title = "Sin Banner" })
+    _UI_TOGGLES["AutoSinSpin"] = TabSpins:Toggle({
+        ConfigKey = "AutoSinSpin",
+        Title = "Auto Sin Spin",
+        Desc = "Rolls Sin until the selected tier or higher is obtained.",
+        Value = CFG.AutoSinSpin,
+        Callback = function(v) CFG.AutoSinSpin = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockSin",
+        Title = "Auto Unlock Sin",
+        Desc = "Unlocks the Sin system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockSin,
+        Callback = function(v) CFG.AutoUnlockSin = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "SinStopRarity",
+        Title = "Sin Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Greed (Rare+)", "Sloth (Epic+)", "Gluttony (Legendary+)", "Pride (Mythical+)", "Wrath (Secret)"},
+        Value = CFG.SinStopRarity or "Pride (Mythical+)",
+        Callback = function(v) CFG.SinStopRarity = v end
+    })
+
+    TabSpins:Section({ Title = "Hunter Rank Banner" })
+    _UI_TOGGLES["AutoHunterRankSpin"] = TabSpins:Toggle({
+        ConfigKey = "AutoHunterRankSpin",
+        Title = "Auto Hunter Rank Spin",
+        Desc = "Rolls Hunter Rank until the selected tier or higher is obtained.",
+        Value = CFG.AutoHunterRankSpin,
+        Callback = function(v) CFG.AutoHunterRankSpin = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockHunter",
+        Title = "Auto Unlock Hunter Rank",
+        Desc = "Unlocks the Hunter Rank system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockHunter,
+        Callback = function(v) CFG.AutoUnlockHunter = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "HunterRankStopRarity",
+        Title = "Hunter Rank Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "D-Rank (Rare+)", "C-Rank (Epic+)", "B-Rank (Legendary+)", "A-Rank (Mythical+)", "S-Rank (Secret)"},
+        Value = CFG.HunterRankStopRarity or "A-Rank (Mythical+)",
+        Callback = function(v) CFG.HunterRankStopRarity = v end
+    })
+
+    TabSpins:Section({ Title = "Shadow Passive Banner" })
+    _UI_TOGGLES["AutoShadowPassiveSpin"] = TabSpins:Toggle({
+        ConfigKey = "AutoShadowPassiveSpin",
+        Title = "Auto Shadow Passive Spin",
+        Desc = "Rolls Shadow Passive until the selected tier or higher is obtained.",
+        Value = CFG.AutoShadowPassiveSpin,
+        Callback = function(v) CFG.AutoShadowPassiveSpin = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockShadow",
+        Title = "Auto Unlock Shadow Passive",
+        Desc = "Unlocks the Shadow Passive system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockShadow,
+        Callback = function(v) CFG.AutoUnlockShadow = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "ShadowPassiveStopRarity",
+        Title = "Shadow Passive Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Elite (Rare+)", "Knight (Epic+)", "Commander (Legendary+)", "Marshal (Mythical+)", "Monarch (Secret)"},
+        Value = CFG.ShadowPassiveStopRarity or "Marshal (Mythical+)",
+        Callback = function(v) CFG.ShadowPassiveStopRarity = v end
+    })
+
+    TabSpins:Section({ Title = "Weapon Passive Banner" })
+    _UI_TOGGLES["AutoWeaponPassive"] = TabSpins:Toggle({
+        ConfigKey = "AutoWeaponPassive",
+        Title = "Auto Weapon Passive Spin",
+        Desc = "Rolls Weapon Passive until the selected tier or higher is obtained.",
+        Value = CFG.AutoWeaponPassive,
+        Callback = function(v) CFG.AutoWeaponPassive = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockWeaponPassive",
+        Title = "Auto Unlock Weapon Passive",
+        Desc = "Unlocks the Weapon Passive system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockWeaponPassive,
+        Callback = function(v) CFG.AutoUnlockWeaponPassive = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "TargetWeaponPassive",
+        Title = "Weapon Passive Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Fine Grade (Rare+)", "Skillful Grade (Epic+)", "Great Grade (Legendary+)", "Supreme Grade (Mythical+)", "Black Blade (Secret)"},
+        Value = CFG.TargetWeaponPassive or "Supreme Grade (Mythical+)",
+        Callback = function(v) CFG.TargetWeaponPassive = v end
+    })
+
+    TabSpins:Section({ Title = "Haki Banner" })
+    _UI_TOGGLES["AutoHakiSpin"] = TabSpins:Toggle({
+        ConfigKey = "AutoHakiSpin",
+        Title = "Auto Haki Spin",
+        Desc = "Rolls Haki until the selected tier or higher is obtained.",
+        Value = CFG.AutoHakiSpin,
+        Callback = function(v) CFG.AutoHakiSpin = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockHaki",
+        Title = "Auto Unlock Haki",
+        Desc = "Unlocks the Haki system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockHaki,
+        Callback = function(v) CFG.AutoUnlockHaki = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "HakiStopRarity",
+        Title = "Haki Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Armament (Rare+)", "Future Sight (Epic+)", "Emission (Legendary+)", "Conqueror (Mythical+)", "Supreme King (Secret)"},
+        Value = CFG.HakiStopRarity or "Conqueror (Mythical+)",
+        Callback = function(v) CFG.HakiStopRarity = v end
+    })
+
+    TabSpins:Section({ Title = "Amulet Banner" })
+    _UI_TOGGLES["AutoAmuletSpin"] = TabSpins:Toggle({
+        ConfigKey = "AutoAmuletSpin",
+        Title = "Auto Amulet Spin",
+        Desc = "Rolls Amulet until the selected tier or higher is obtained.",
+        Value = CFG.AutoAmuletSpin,
+        Callback = function(v) CFG.AutoAmuletSpin = v end
+    })
+    TabSpins:Toggle({
+        ConfigKey = "AutoUnlockAmulet",
+        Title = "Auto Unlock Amulet",
+        Desc = "Unlocks the Amulet system when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockAmulet,
+        Callback = function(v) CFG.AutoUnlockAmulet = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "AmuletCategory",
+        Title = "Amulet Boost",
+        Desc = "Choose the amulet boost to roll and check against the stop tier.",
+        Values = {"Energy", "Gold", "Damage"},
+        Value = CFG.AmuletCategory or "Energy",
+        Callback = function(v) CFG.AmuletCategory = v end
+    })
+    TabSpins:Dropdown({
+        ConfigKey = "AmuletStopRarity",
+        Title = "Amulet Stop Tier",
+        Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
+        Values = {"Any", "Tier II (Rare+)", "Tier III (Epic+)", "Tier IV (Legendary+)", "Tier V (Mythical+)", "Tier VI (Secret)"},
+        Value = CFG.AmuletStopRarity or "Tier V (Mythical+)",
+        Callback = function(v) CFG.AmuletStopRarity = v end
     })
 end
 
 -- ══════════════════════════════════════════════════════════
 -- TAB 6: 🎒 EQUIPMENT & UPGRADES
 -- ══════════════════════════════════════════════════════════
-local TabEquip = Window:Tab({ Title = "Equip & Upgrade", Icon = "backpack" })
-do
-    TabEquip:Section({ Title = "Auto Equip Best Items & Titles" })
+Tabs.Equip = function(win)
+    local TabEquip = win:Tab({ Title = "Equip & Upgrade", Icon = "backpack" })
+    TabEquip:Section({ Title = "Best Equipment" })
     TabEquip:Toggle({
-        Title = "Equip Best (Global Boost)",
-        Desc = "Applies highest stats across gear for selected boost",
         ConfigKey = "AutoEquipBest",
+        Title = "Auto Equip Best",
+        Desc = "Applies the selected global boost and equips the chosen inventory categories.",
         Value = CFG.AutoEquipBest,
         Callback = function(v) CFG.AutoEquipBest = v end
     })
     TabEquip:Dropdown({
-        Title = "Global Target Boost",
-        Desc = "Select prioritized stat",
-        Values = {"Energy","Gold","Damage","Drop","GachaLuck","GachaSpins","AtkSPD","CritDMG","CritChance"},
         ConfigKey = "AutoEquipBoost",
+        Title = "Preferred Boost",
+        Desc = "Choose the boost used by the global Equip Best system.",
+        Values = {"Energy","Gold","Damage","Drop","GachaLuck","GachaSpins","AtkSPD","CritDMG","CritChance"},
         Value = CFG.AutoEquipBoost,
         Callback = function(v) CFG.AutoEquipBoost = v end
     })
     TabEquip:Toggle({
-        Title = "Equip Best Title (Highest Stat & Visual)",
-        Desc = "Equips player's strongest unlocked title",
         ConfigKey = "EquipBestTitle",
+        Title = "Auto Equip Best Title",
+        Desc = "Equips the highest numbered unlocked title for boost and appearance.",
         Value = CFG.EquipBestTitle,
         Callback = function(v) CFG.EquipBestTitle = v end
     })
     TabEquip:Dropdown({
-        Title = "Equip Best Categories (Multi-Select)",
-        Desc = "Select categories to include in Auto Equip Best",
+        ConfigKey = "EquipBestCategories",
+        Title = "Equipment Categories",
+        Desc = "Choose which categories Auto Equip Best should update.",
         Multi = true,
         Values = { "Weapon", "Warrior", "Avatar", "Accessory", "Mount", "Jewel", "Wing", "DevilFruit", "Crewmate", "Amulet" },
-        ConfigKey = "EquipBestCategories",
         Value = CFG.EquipBestCategories or { "Weapon", "Warrior", "Avatar", "Accessory", "Mount", "Jewel", "Wing", "DevilFruit", "Crewmate", "Amulet" },
         Callback = function(v)
             CFG.EquipBestCategories = v
         end
     })
     TabEquip:Button({
-        Title = "Equip Best (Selected Categories) NOW",
-        Desc = "Immediately applies best equipment for chosen categories and titles",
-        Callback = doEquipBestCategories
+        Title = "Equip Selected Categories",
+        Desc = "Updates the chosen inventory categories now. The title option is respected.",
+        Callback = function() doEquipBestCategories(true) end
     })
 
-    TabEquip:Section({ Title = "Warrior Upgrades & Priority" })
+    TabEquip:Section({ Title = "Rank & Progression" })
     TabEquip:Toggle({
-        Title = "Auto Upgrade Warrior",
-        Desc = "Upgrades warrior attributes automatically",
-        ConfigKey = "AutoUpgradeWarrior",
-        Value = CFG.AutoUpgradeWarrior,
-        Callback = function(v) CFG.AutoUpgradeWarrior = v end
-    })
-    TabEquip:Toggle({
-        Title = "Auto Unlock Warrior First (15k Gold @ DBZ)",
-        Desc = "Unlocks Warrior Upgrades system first",
-        ConfigKey = "AutoUnlockWarrior",
-        Value = CFG.AutoUnlockWarrior,
-        Callback = function(v) CFG.AutoUnlockWarrior = v end
-    })
-    TabEquip:Dropdown({
-        Title = "Warrior Stat Priority",
-        Desc = "All balances available stats one level at a time",
-        Values = {"All (Balanced)", "Energy", "Damage", "Gold", "AttackRange"},
-        ConfigKey = "WarriorUpgradePriority",
-        Value = CFG.WarriorUpgradePriority,
-        Callback = function(v) CFG.WarriorUpgradePriority = v end
-    })
-
-    TabEquip:Section({ Title = "Progression Upgrades" })
-    TabEquip:Toggle({
-        Title = "Auto Rank Up (Rebirth Immediately)",
-        Desc = "Automatically rebirths / ranks up as soon as Energy requirement is met",
         ConfigKey = "AutoRankUp",
+        Title = "Auto Rebirth",
+        Desc = "Ranks up when the energy requirement is met and no dungeon is active.",
         Value = CFG.AutoRankUp,
         Callback = function(v)
             CFG.AutoRankUp = v
@@ -8746,78 +9981,232 @@ do
             end
         end
     })
+
+    TabEquip:Section({ Title = "Warrior Upgrades" })
     TabEquip:Toggle({
-        Title = "Auto Offline Upgrades (Balanced)",
-        Desc = "Balances Energy, Gold and MaxTime one level at a time",
+        ConfigKey = "AutoUpgradeWarrior",
+        Title = "Auto Warrior Upgrades",
+        Desc = "Buys selected warrior upgrades with the system currency.",
+        Value = CFG.AutoUpgradeWarrior,
+        Callback = function(v) CFG.AutoUpgradeWarrior = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUnlockWarrior",
+        Title = "Auto Unlock Warrior",
+        Desc = "Unlocks Warrior when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockWarrior,
+        Callback = function(v) CFG.AutoUnlockWarrior = v end
+    })
+    TabEquip:Dropdown({
+        ConfigKey = "WarriorSelectedUpgradeNames",
+        Title = "Warrior Upgrade Stats",
+        Desc = "Choose the stats to upgrade. An empty list buys nothing.",
+        Multi = true,
+        Values = {"Energy", "Damage", "Gold", "AttackRange"},
+        Value = CFG.WarriorSelectedUpgradeNames or {"Energy", "Damage", "Gold", "AttackRange"},
+        Callback = function(v) CFG.WarriorSelectedUpgradeNames = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "BalanceWarriorUpgrades",
+        Title = "Balance Warrior Upgrades",
+        Desc = "On: raises the lowest eligible stat by one level. Off: requests max for the chosen stat.",
+        Value = CFG.BalanceWarriorUpgrades,
+        Callback = function(v) CFG.BalanceWarriorUpgrades = v end
+    })
+
+    TabEquip:Section({ Title = "Offline Upgrades" })
+    TabEquip:Toggle({
         ConfigKey = "AutoOfflineUpgrades",
+        Title = "Auto Offline Upgrades",
+        Desc = "Buys selected offline upgrades with the system currency.",
         Value = CFG.AutoOfflineUpgrades,
         Callback = function(v) CFG.AutoOfflineUpgrades = v end
     })
     TabEquip:Toggle({
-        Title = "Auto Unlock Offline Upgrades First (45k Gold @ DBZ)",
-        Desc = "Farms gold & unlocks offline upgrade system first",
         ConfigKey = "AutoUnlockOffline",
+        Title = "Auto Unlock Offline",
+        Desc = "Unlocks Offline when its gold and world requirements are met.",
         Value = CFG.AutoUnlockOffline,
         Callback = function(v) CFG.AutoUnlockOffline = v end
     })
+    TabEquip:Dropdown({
+        ConfigKey = "OfflineSelectedUpgradeNames",
+        Title = "Offline Upgrade Stats",
+        Desc = "Choose the stats to upgrade. An empty list buys nothing.",
+        Multi = true,
+        Values = OFFLINE_UPGRADE_NAMES,
+        Value = CFG.OfflineSelectedUpgradeNames or OFFLINE_UPGRADE_NAMES,
+        Callback = function(v) CFG.OfflineSelectedUpgradeNames = v end
+    })
     TabEquip:Toggle({
-        Title = "Auto Upgrade Selected Systems",
-        Desc = "Upgrades the chosen Warrior, Offline, TT, Portal or Class Tree systems",
+        ConfigKey = "BalanceOfflineUpgrades",
+        Title = "Balance Offline Upgrades",
+        Desc = "On: raises the lowest eligible stat by one level. Off: requests max for the chosen stat.",
+        Value = CFG.BalanceOfflineUpgrades,
+        Callback = function(v) CFG.BalanceOfflineUpgrades = v end
+    })
+
+    TabEquip:Section({ Title = "Portal Upgrades" })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUpgradePortal",
+        Title = "Auto Portal Upgrades",
+        Desc = "Buys selected portal upgrades with the system currency.",
+        Value = CFG.AutoUpgradePortal,
+        Callback = function(v) CFG.AutoUpgradePortal = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUnlockPortal",
+        Title = "Auto Unlock Portal",
+        Desc = "Unlocks Portal when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockPortal,
+        Callback = function(v) CFG.AutoUnlockPortal = v end
+    })
+    TabEquip:Dropdown({
+        ConfigKey = "PortalSelectedUpgradeNames",
+        Title = "Portal Upgrade Stats",
+        Desc = "Choose the stats to upgrade. An empty list buys nothing.",
+        Multi = true,
+        Values = {"Energy", "Damage", "MaxEnemy", "WarriorDropChance"},
+        Value = CFG.PortalSelectedUpgradeNames or {"Energy", "Damage", "MaxEnemy", "WarriorDropChance"},
+        Callback = function(v) CFG.PortalSelectedUpgradeNames = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "BalancePortalUpgrades",
+        Title = "Balance Portal Upgrades",
+        Desc = "On: raises the lowest eligible stat by one level. Off: requests max for the chosen stat.",
+        Value = CFG.BalancePortalUpgrades,
+        Callback = function(v) CFG.BalancePortalUpgrades = v end
+    })
+
+    TabEquip:Section({ Title = "Class Tree Upgrades" })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUpgradeClassTree",
+        Title = "Auto Class Tree Upgrades",
+        Desc = "Buys selected class tree upgrades with the system currency.",
+        Value = CFG.AutoUpgradeClassTree,
+        Callback = function(v) CFG.AutoUpgradeClassTree = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUnlockClassTree",
+        Title = "Auto Unlock Class Tree",
+        Desc = "Unlocks Class Tree when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockClassTree,
+        Callback = function(v) CFG.AutoUnlockClassTree = v end
+    })
+    TabEquip:Dropdown({
+        ConfigKey = "ClassTreeSelectedUpgradeNames",
+        Title = "Class Tree Upgrade Stats",
+        Desc = "Choose the stats to upgrade. An empty list buys nothing.",
+        Multi = true,
+        Values = {"Start", "Energy", "Damage", "Gold", "CritChance", "CritDMG", "WalkSPD"},
+        Value = CFG.ClassTreeSelectedUpgradeNames or {"Start", "Energy", "Damage", "Gold", "CritChance", "CritDMG", "WalkSPD"},
+        Callback = function(v) CFG.ClassTreeSelectedUpgradeNames = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "BalanceClassTreeUpgrades",
+        Title = "Balance Class Tree Upgrades",
+        Desc = "On: raises the lowest eligible stat by one level. Off: requests max for the chosen stat.",
+        Value = CFG.BalanceClassTreeUpgrades,
+        Callback = function(v) CFG.BalanceClassTreeUpgrades = v end
+    })
+
+    TabEquip:Section({ Title = "Ninja Progression" })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUpgradeNinja",
+        Title = "Auto Ninja Upgrades",
+        Desc = "Upgrades Ninja Progression energy with NinjaCoins, one level at a time.",
+        Value = CFG.AutoUpgradeNinja,
+        Callback = function(v) CFG.AutoUpgradeNinja = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUnlockNinja",
+        Title = "Auto Unlock Ninja Progression",
+        Desc = "Unlocks Ninja Progression when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockNinja,
+        Callback = function(v) CFG.AutoUnlockNinja = v end
+    })
+
+    TabEquip:Section({ Title = "Ant Progression" })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUpgradeAnt",
+        Title = "Auto Ant Upgrades",
+        Desc = "Upgrades Ant Progression energy with AntCoins, one level at a time.",
+        Value = CFG.AutoUpgradeAnt,
+        Callback = function(v) CFG.AutoUpgradeAnt = v end
+    })
+    TabEquip:Toggle({
+        ConfigKey = "AutoUnlockAnt",
+        Title = "Auto Unlock Ant Progression",
+        Desc = "Unlocks Ant Progression when its gold and world requirements are met.",
+        Value = CFG.AutoUnlockAnt,
+        Callback = function(v) CFG.AutoUnlockAnt = v end
+    })
+
+    TabEquip:Section({ Title = "Global Upgrades" })
+    TabEquip:Toggle({
         ConfigKey = "AutoUpgrade",
+        Title = "Auto Upgrade Selected Systems",
+        Desc = "Upgrades the chosen systems using their available currencies.",
         Value = CFG.AutoUpgrade,
         Callback = function(v) CFG.AutoUpgrade = v end
     })
     TabEquip:Dropdown({
-        Title = "Select Upgrade Systems",
-        Desc = "Choose which systems Auto Upgrade will purchase from",
-        Multi = true,
-        Values = UPGRADE_SYSTEM_NAMES,
         ConfigKey = "SelectedGlobalUpgrades",
-        Value = CFG.SelectedGlobalUpgrades,
+        Title = "Global Upgrade Systems",
+        Desc = "Choose the systems to upgrade. Clear the list to pause global purchases.",
+        Multi = true,
+        Values = {"Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades", "Portal Upgrades", "Class Tree", "Ninja Progression", "Ant Progression"},
+        Value = CFG.SelectedGlobalUpgrades or {"Warrior Upgrades", "Offline Upgrades", "Time Trial Upgrades", "Portal Upgrades", "Class Tree", "Ninja Progression", "Ant Progression"},
         Callback = function(v) CFG.SelectedGlobalUpgrades = v end
     })
     TabEquip:Toggle({
-        Title = "Balanced Upgrades (Lowest Level First)",
-        Desc = "Lowest available level first; one level per purchase. Off = buy max",
         ConfigKey = "BalanceGlobalUpgrades",
+        Title = "Balance Global Upgrades",
+        Desc = "On: raises the lowest eligible stat by one level. Off: requests max for the chosen stat.",
         Value = CFG.BalanceGlobalUpgrades,
         Callback = function(v) CFG.BalanceGlobalUpgrades = v end
     })
 
     TabEquip:Section({ Title = "Merge & Crafting" })
     TabEquip:Toggle({
-        Title = "Auto Merge All (Weapons, Wings, Pets)",
-        Desc = "Automatically merges duplicates in inventory",
         ConfigKey = "AutoMergeAll",
+        Title = "Auto Merge Items",
+        Desc = "Merges available weapons, wings, pets, warriors and avatars.",
         Value = CFG.AutoMergeAll,
         Callback = function(v) CFG.AutoMergeAll = v end
     })
     TabEquip:Button({
-        Title = "Merge All NOW",
-        Desc = "Immediately merges duplicates",
+        Title = "Merge Available Items",
+        Desc = "Merges available weapons, wings, pets, warriors and avatars once.",
         Callback = doMergeAll
     })
     TabEquip:Toggle({
-        Title = "Auto Craft Enabled (Jewels)",
-        Desc = "Crafts jewelry upgrades in ExchangeSystem",
         ConfigKey = "AutoCraft",
+        Title = "Auto Craft Jewelry",
+        Desc = "Crafts selected jewelry up to the tier limit and claims jewel rewards.",
         Value = CFG.AutoCraft,
         Callback = function(v) CFG.AutoCraft = v end
     })
     TabEquip:Slider({
-        Title = "Max Craft Tier (1-6)",
-        Desc = "Highest tier of jewel to craft",
-        Step = 1,
         ConfigKey = "CraftMaxTier",
+        Title = "Maximum Craft Tier",
+        Desc = "Limits crafting to this tier and below.",
+        Step = 1,
         Value = { Min = 1, Max = 6, Default = CFG.CraftMaxTier },
         Callback = function(v) CFG.CraftMaxTier = v end
     })
-    TabEquip:Toggle({ Title = "Craft Rings", ConfigKey = "CraftSelection.Ring", Value = CFG.CraftSelection.Ring, Callback = function(v) CFG.CraftSelection.Ring = v end })
-    TabEquip:Toggle({ Title = "Craft Collars", ConfigKey = "CraftSelection.Collar", Value = CFG.CraftSelection.Collar, Callback = function(v) CFG.CraftSelection.Collar = v end })
-    TabEquip:Toggle({ Title = "Craft Earrings", ConfigKey = "CraftSelection.Earring", Value = CFG.CraftSelection.Earring, Callback = function(v) CFG.CraftSelection.Earring = v end })
+    TabEquip:Toggle({
+        Desc = "Includes energy rings in automatic and manual crafting.",
+        ConfigKey = "CraftSelection.Ring", Title = "Craft Rings", Value = CFG.CraftSelection.Ring, Callback = function(v) CFG.CraftSelection.Ring = v end })
+    TabEquip:Toggle({
+        Desc = "Includes gold collars in automatic and manual crafting.",
+        ConfigKey = "CraftSelection.Collar", Title = "Craft Collars", Value = CFG.CraftSelection.Collar, Callback = function(v) CFG.CraftSelection.Collar = v end })
+    TabEquip:Toggle({
+        Desc = "Includes damage earrings in automatic and manual crafting.",
+        ConfigKey = "CraftSelection.Earring", Title = "Craft Earrings", Value = CFG.CraftSelection.Earring, Callback = function(v) CFG.CraftSelection.Earring = v end })
     TabEquip:Button({
-        Title = "Craft All Available NOW",
-        Desc = "Immediately crafts all selected jewel categories",
+        Title = "Craft Selected Jewelry",
+        Desc = "Crafts chosen jewelry categories up to the tier limit once.",
         Callback = doAutoCraft
     })
 end
@@ -8825,15 +10214,15 @@ end
 -- ══════════════════════════════════════════════════════════
 -- TAB 7: 🧪 CONSUMABLES & SHOPS (MULTI-BUY SHOPS RESTORED!)
 -- ══════════════════════════════════════════════════════════
-local TabCons = Window:Tab({ Title = "Consumables & Shops", Icon = "flask-conical" })
-do
+Tabs.Cons = function(win)
+    local TabCons = win:Tab({ Title = "Consumables & Shops", Icon = "flask-conical" })
 
 
-    TabCons:Section({ Title = "Time Trial Potion Shop (Multi-Buy Selection)" })
+    TabCons:Section({ Title = "Trial Potion Shop" })
     TabCons:Toggle({
-        Title = "Auto Buy TT Shop Potions",
-        Desc = "Automatically buys selected potions from TT shop",
         ConfigKey = "AutoBuyTTShop",
+        Title = "Auto Buy Trial Potions",
+        Desc = "Buys only the selected potions. An empty selection buys nothing.",
         Value = CFG.AutoBuyTTShop,
         Callback = function(v) CFG.AutoBuyTTShop = v end
     })
@@ -8851,21 +10240,21 @@ do
         "Drop Potion II (1000)"
     }
     TabCons:Dropdown({
-        Title = "Select TT Potions (Multi-Select)",
-        Desc = "Choose which potions to auto purchase",
+        ConfigKey = "TTSelectedPotionNames",
+        Title = "Trial Potions",
+        Desc = "Choose the potions to buy with TrialShards. Clear the list to stop purchases.",
         Multi = true,
         Values = TT_POTION_NAMES,
-        ConfigKey = "TTSelectedPotionNames",
         Value = CFG.TTSelectedPotionNames or {},
         Callback = function(v)
             CFG.TTSelectedPotionNames = v
         end
     })
     TabCons:Dropdown({
-        Title = "TT Shop Multi-Buy Multiplier",
-        Desc = "Amount to purchase each cycle",
-        Values = {"1x", "5x", "10x", "Max"},
         ConfigKey = "TTShopBuyAmountStr",
+        Title = "Potions per Purchase",
+        Desc = "Choose how many of each selected potion to request per purchase.",
+        Values = {"1x", "5x", "10x", "Max"},
         Value = CFG.TTShopBuyAmountStr or "1x",
         Callback = function(v)
             CFG.TTShopBuyAmountStr = v
@@ -8876,16 +10265,16 @@ do
         end
     })
     TabCons:Button({
-        Title = "Buy Selected TT Potions NOW",
-        Desc = "Immediately purchases all selected potions from TT shop",
+        Title = "Buy Selected Trial Potions",
+        Desc = "Buys only the selected potions using the chosen quantity.",
         Callback = doTimeTrialShopBuy
     })
 
-    TabCons:Section({ Title = "Time Trial Stat Upgrades (TrialShards)" })
+    TabCons:Section({ Title = "Trial Stat Upgrades" })
     TabCons:Toggle({
-        Title = "Auto Time Trial Upgrades",
-        Desc = "Balances selected TT stats one level at a time using TrialShards",
         ConfigKey = "AutoUpgradeTT",
+        Title = "Auto Trial Upgrades",
+        Desc = "Uses TrialShards to buy the selected trial stat upgrades.",
         Value = CFG.AutoUpgradeTT,
         Callback = function(v) CFG.AutoUpgradeTT = v end
     })
@@ -8896,27 +10285,34 @@ do
         "Overdrive (AtkSPD +2.5%)"
     }
     TabCons:Dropdown({
-        Title = "Select TT Upgrades (Multi-Select)",
-        Desc = "Choose which TT upgrades to purchase",
+        ConfigKey = "TTSelectedUpgradeNames",
+        Title = "Trial Upgrade Stats",
+        Desc = "Choose which trial stats to upgrade. An empty list buys nothing.",
         Multi = true,
         Values = TT_UPGRADE_NAMES,
-        ConfigKey = "TTSelectedUpgradeNames",
         Value = CFG.TTSelectedUpgradeNames or TT_UPGRADE_NAMES,
         Callback = function(v)
             CFG.TTSelectedUpgradeNames = v
         end
     })
+    TabCons:Toggle({
+        ConfigKey = "BalanceTTUpgrades",
+        Title = "Balance Trial Upgrades",
+        Desc = "On: raises the lowest eligible stat by one level. Off: requests max for the chosen stat.",
+        Value = CFG.BalanceTTUpgrades,
+        Callback = function(v) CFG.BalanceTTUpgrades = v end
+    })
     TabCons:Button({
-        Title = "Upgrade TT Stats NOW",
-        Desc = "Purchases one level of the lowest selected Time Trial stat",
+        Title = "Buy Trial Upgrade",
+        Desc = "Purchases an eligible selected stat using the current Balance setting.",
         Callback = doTimeTrialUpgrade
     })
 
-    TabCons:Section({ Title = "Pirate Juice Shop (One Piece Multi-Buy)" })
+    TabCons:Section({ Title = "Pirate Juice Shop" })
     TabCons:Toggle({
-        Title = "Auto Buy Pirate Juices",
-        Desc = "Automatically buys selected juices from Pirate shop",
         ConfigKey = "AutoBuyPirateShop",
+        Title = "Auto Buy Pirate Juices",
+        Desc = "Buys only the selected juices. An empty selection buys nothing.",
         Value = CFG.AutoBuyPirateShop,
         Callback = function(v) CFG.AutoBuyPirateShop = v end
     })
@@ -8929,21 +10325,21 @@ do
         "Luck Juice I (1000)"
     }
     TabCons:Dropdown({
-        Title = "Select Pirate Juices (Multi-Select)",
-        Desc = "Choose which juices to buy",
+        ConfigKey = "PirateSelectedJuiceNames",
+        Title = "Pirate Juices",
+        Desc = "Choose the juices to buy. Clear the list to stop purchases.",
         Multi = true,
         Values = PIRATE_JUICE_NAMES,
-        ConfigKey = "PirateSelectedJuiceNames",
-        Value = CFG.PirateSelectedJuiceNames or PIRATE_JUICE_NAMES,
+        Value = CFG.PirateSelectedJuiceNames or {},
         Callback = function(v)
             CFG.PirateSelectedJuiceNames = v
         end
     })
     TabCons:Dropdown({
-        Title = "Juice Multi-Buy Multiplier",
-        Desc = "Amount to buy each cycle",
-        Values = {"1x", "5x", "10x", "Max"},
         ConfigKey = "PirateShopBuyAmountStr",
+        Title = "Juices per Purchase",
+        Desc = "Choose how many of each selected juice to request per purchase.",
+        Values = {"1x", "5x", "10x", "Max"},
         Value = CFG.PirateShopBuyAmountStr or "1x",
         Callback = function(v)
             CFG.PirateShopBuyAmountStr = v
@@ -8954,8 +10350,8 @@ do
         end
     })
     TabCons:Button({
-        Title = "Buy Selected Pirate Juices NOW",
-        Desc = "Immediately purchases chosen juices",
+        Title = "Buy Selected Pirate Juices",
+        Desc = "Buys only the selected juices using the chosen quantity.",
         Callback = doPirateShopBuy
     })
 end
@@ -8963,46 +10359,46 @@ end
 -- ══════════════════════════════════════════════════════════
 -- TAB 8: 🏛️ HARBOR & MAPS
 -- ══════════════════════════════════════════════════════════
-local TabHarbor = Window:Tab({ Title = "Harbor & Maps", Icon = "compass" })
-do
-    TabHarbor:Section({ Title = "Reward Claimers" })
+Tabs.Harbor = function(win)
+    local TabHarbor = win:Tab({ Title = "Harbor & Maps", Icon = "compass" })
+    TabHarbor:Section({ Title = "Rewards" })
     TabHarbor:Toggle({
-        Title = "Auto Claim All",
-        Desc = "Claims Achievements, Dailies, Battlepass, Chests",
         ConfigKey = "AutoClaimAll",
+        Title = "Auto Claim Rewards",
+        Desc = "Claims available achievements, daily rewards, index rewards, passes and chests.",
         Value = CFG.AutoClaimAll,
         Callback = function(v) CFG.AutoClaimAll = v end
     })
     TabHarbor:Toggle({
-        Title = "Auto Claim Like Rewards",
-        Desc = "Claims 20 like milestone rewards automatically",
         ConfigKey = "AutoClaimLikeRewards",
+        Title = "Auto Claim Like Rewards",
+        Desc = "Claims available rewards from the game's like milestones.",
         Value = CFG.AutoClaimLikeRewards,
         Callback = function(v) CFG.AutoClaimLikeRewards = v end
     })
     TabHarbor:Button({
-        Title = "Claim All Rewards NOW",
-        Desc = "Immediately executes claim on all reward systems",
+        Title = "Claim Available Rewards",
+        Desc = "Claims available rewards from the supported reward systems.",
         Callback = doClaimAll
     })
     TabHarbor:Button({
-        Title = "Redeem All Promo Codes",
-        Desc = "Redeems all known active promotional codes",
+        Title = "Redeem Saved Codes",
+        Desc = "Attempts each promo code included in this script. Expired codes may be rejected.",
         Callback = doRedeemAllCodes
     })
 
-    TabHarbor:Section({ Title = "1-Click Multi-Tasking Automations" })
+    TabHarbor:Section({ Title = "Expeditions & Collectibles" })
     TabHarbor:Toggle({
-        Title = "Auto Harbor (Expedition)",
-        Desc = "Automatically claims and starts Harbor expeditions",
         ConfigKey = "AutoHarbor",
+        Title = "Auto Harbor Expeditions",
+        Desc = "Claims harbor rewards and starts the next expedition.",
         Value = CFG.AutoHarbor,
         Callback = function(v) CFG.AutoHarbor = v end
     })
     TabHarbor:Toggle({
-        Title = "Auto Collect Commandments",
-        Desc = "Automatically collects Commandments & spawned items",
         ConfigKey = "AutoCommandments",
+        Title = "Auto Collect Commandments",
+        Desc = "Collects available commandments and spawned items.",
         Value = CFG.AutoCommandments,
         Callback = function(v) CFG.AutoCommandments = v end
     })
@@ -9020,8 +10416,8 @@ do
         })
     end
     TabHarbor:Button({
-        Title = "Buy All Maps In Order",
-        Desc = "Unlocks and purchases all available world maps",
+        Title = "Unlock Available Worlds",
+        Desc = "Attempts world purchases in order. Each purchase still requires enough gold.",
         Callback = function()
             for _, mk in ipairs(MAP_LIST) do
                 Library.Remote:Fire("TeleportSystem", "Buy", mk)
@@ -9034,9 +10430,9 @@ end
 -- ══════════════════════════════════════════════════════════
 -- TAB 9: ⚙️ AUTO DELETE & SELL (ALL 11 RARITY LEVELS)
 -- ══════════════════════════════════════════════════════════
-local TabDelete = Window:Tab({ Title = "Auto Delete & Clean", Icon = "trash-2" })
-do
-    TabDelete:Section({ Title = "Auto Clean / Delete Settings (Multi-Dropdown)" })
+Tabs.Delete = function(win)
+    local TabDelete = win:Tab({ Title = "Auto Delete & Clean", Icon = "trash-2" })
+    TabDelete:Section({ Title = "Auto Delete by Category" })
     local deleteCategories = {
         { Key = "Pet",       Label = "Pets",        TKey = "AutoDeletePets",        DKey = "DeletePetsBelow" },
         { Key = "Weapon",    Label = "Weapons",     TKey = "AutoDeleteWeapons",     DKey = "DeleteWeaponsBelow" },
@@ -9049,66 +10445,81 @@ do
     }
     for _, c in ipairs(deleteCategories) do
         TabDelete:Toggle({
-            Title = "Auto Clean " .. c.Label,
+            Title = "Auto Delete " .. c.Label,
+            Desc = "Deletes unequipped items of the selected rarities, including locked items.",
             ConfigKey = c.TKey,
             Value = CFG[c.TKey],
             Callback = function(v) CFG[c.TKey] = v end
         })
         TabDelete:Dropdown({
-            Title = c.Label .. " Rarities (Multi-Select)",
-            Desc = "Rarities to delete for " .. c.Label,
+            Title = c.Label .. " · Delete Rarities",
+            Desc = "Choose rarities to delete. Clear the list to keep every item.",
             Multi = true,
             Values = ALL_RARITY_NAMES,
-            Value = {},
+            ConfigKey = "DeleteRaritySelection." .. c.Key,
+            Value = CFG.DeleteRaritySelection[c.Key] or {"Common", "Rare"},
             Callback = function(v)
+                CFG.DeleteRaritySelection[c.Key] = v
                 for _, r in ipairs(ALL_RARITY_NAMES) do
                     RarityToggles[c.Key][r] = isItemInList(v, r)
                 end
             end
         })
     end
+    TabDelete:Section({ Title = "Auto Sell" })
+    TabDelete:Toggle({
+        Title = "Auto Sell Items", ConfigKey = "AutoSell",
+        Desc = "Sells unequipped items of the selected rarities across all inventory categories, including locked items.",
+        Value = CFG.AutoSell, Callback = function(v) CFG.AutoSell = v end
+    })
+    TabDelete:Dropdown({
+        Title = "Sell Rarities", ConfigKey = "SellSelectedRarities", Multi = true,
+        Desc = "Choose rarities to sell. An empty list sells nothing.", Values = ALL_RARITY_NAMES,
+        Value = CFG.SellSelectedRarities or {}, Callback = function(v) CFG.SellSelectedRarities = v end
+    })
+
 end
 
 -- ══════════════════════════════════════════════════════════
 -- TAB 10: ℹ️ PLAYER & SERVER
 -- ══════════════════════════════════════════════════════════
-local TabPlayer = Window:Tab({ Title = "Player & Server", Icon = "user" })
-do
-    TabPlayer:Section({ Title = "Player Movement & Hacks" })
+Tabs.Player = function(win)
+    local TabPlayer = win:Tab({ Title = "Player & Server", Icon = "user" })
+    TabPlayer:Section({ Title = "Character Settings" })
     TabPlayer:Toggle({
-        Title = "Dash Hack",
-        Desc = "Multiplies dash velocity and boosts movement during dashes",
         ConfigKey = "DashHack",
+        Title = "Enhanced Dash",
+        Desc = "Applies the chosen speed while a character dash is active.",
         Value = CFG.DashHack,
         Callback = function(v) CFG.DashHack = v end
     })
     TabPlayer:Slider({
-        Title = "Dash Speed",
-        Desc = "Custom dash speed velocity (50 - 500)",
-        Step = 10,
         ConfigKey = "DashSpeed",
+        Title = "Dash Speed",
+        Desc = "Choose the movement speed applied by Enhanced Dash.",
+        Step = 10,
         Value = { Min = 50, Max = 500, Default = CFG.DashSpeed or 150 },
         Callback = function(v) CFG.DashSpeed = v end
     })
     TabPlayer:Slider({
-        Title = "Jump Power",
-        Desc = "Player jump height (50 - 500)",
-        Step = 5,
         ConfigKey = "JumpPower",
+        Title = "Jump Power",
+        Desc = "Sets the character's local jump power.",
+        Step = 5,
         Value = { Min = 50, Max = 500, Default = CFG.JumpPower },
         Callback = function(v) CFG.JumpPower = v end
     })
     TabPlayer:Toggle({
-        Title = "Infinite Health",
-        Desc = "Constantly locks health to maximum",
         ConfigKey = "InfHealth",
+        Title = "Maintain Local Health",
+        Desc = "Sets the character's displayed local health to its maximum.",
         Value = CFG.InfHealth,
         Callback = function(v) CFG.InfHealth = v end
     })
     TabPlayer:Toggle({
-        Title = "No Clip",
-        Desc = "Disables collision on all character parts",
         ConfigKey = "NoClip",
+        Title = "No Collision",
+        Desc = "Disables character collisions while enabled and restores them when turned off.",
         Value = CFG.NoClip,
         Callback = function(v)
             CFG.NoClip = v
@@ -9116,37 +10527,37 @@ do
         end
     })
     TabPlayer:Button({
-        Title = "Teleport to Spawn",
-        Desc = "Returns character to spawn origin",
+        Title = "Teleport to Origin",
+        Desc = "Moves the character to coordinates 0, 10, 0.",
         Callback = function()
             local root = getRoot()
             if root then root.CFrame = CFrame.new(0, 10, 0) end
         end
     })
 
-    TabPlayer:Section({ Title = "Anti-AFK & Server Actions" })
+    TabPlayer:Section({ Title = "Session Controls" })
     TabPlayer:Toggle({
-        Title = "Anti-AFK (Prevent 20m Kick)",
-        Desc = "Bypasses Roblox 20 minute inactivity kick",
         ConfigKey = "AntiAFK",
+        Title = "Anti Idle",
+        Desc = "Keeps the session active when the game detects inactivity.",
         Value = CFG.AntiAFK,
         Callback = function(v) CFG.AntiAFK = v end
     })
     TabPlayer:Toggle({
-        Title = "Auto Rejoin on Disconnect",
-        Desc = "Automatically reconnects if disconnected",
         ConfigKey = "AutoRejoin",
+        Title = "Auto Rejoin",
+        Desc = "Attempts to reconnect when a disconnect prompt appears.",
         Value = CFG.AutoRejoin,
         Callback = function(v) CFG.AutoRejoin = v end
     })
     TabPlayer:Button({
-        Title = "Rejoin Current Server NOW",
-        Desc = "Re-executes connection to current place instance",
+        Title = "Rejoin Current Server",
+        Desc = "Reconnects to the current server instance when it is available.",
         Callback = doRejoinCurrent
     })
     TabPlayer:Button({
-        Title = "Rejoin New Server (Hop)",
-        Desc = "Finds another active server and teleports",
+        Title = "Find Another Server",
+        Desc = "Searches for a different public server with a free slot, then joins it.",
         Callback = doServerHop
     })
 
@@ -9156,10 +10567,10 @@ do
             pingVal = math.floor((lp:GetNetworkPing() or 0.05) * 1000)
         end
     end)
-    TabPlayer:Section({ Title = "System Information" })
+    TabPlayer:Section({ Title = "Session Details" })
     TabPlayer:Paragraph({
         Title = "Session Information",
-        Desc = string.format("Place ID: %s\nJob ID: %s\nPing: ~%d ms\nDevelopers: cook45 x clack (25+ yrs exp)",
+        Desc = string.format("Place ID: %s\nJob ID: %s\nPing: ~%d ms\nInterface: Axel Hub · Gameplay: cook45 x clack",
             tostring(game.PlaceId),
             tostring(game.JobId):sub(1, 16) .. "...",
             pingVal
@@ -9167,61 +10578,63 @@ do
     })
 end
 
-
 -- ══════════════════════════════════════════════════════════
 -- TAB 11: ⚙️ CONFIGURATION MANAGER
 -- ══════════════════════════════════════════════════════════
-local TabConfig = Window:Tab({ Title = "Configuration", Icon = "settings" })
-do
+Tabs.Config = function(win)
+    local TabConfig = win:Tab({ Title = "Configuration", Icon = "settings" })
     TabConfig:Section({ Title = "Profile Management" })
 
     local configList = getSavedConfigsList()
     local DropdownConfig = TabConfig:Dropdown({
-        Title = "Select Profile",
-        Desc = "Choose a configuration profile to load, save, or delete",
-        Values = configList,
         ConfigKey = "SelectedConfigName",
+        Title = "Selected Profile",
+        Desc = "Choose the profile to save, load or delete.",
+        Values = configList,
         Value = CFG.SelectedConfigName or "default",
         Callback = function(v)
             CFG.SelectedConfigName = v
+            if CFG.AutoLoadConfig and writefile then
+                pcall(writefile, CONFIG_FOLDER .. "/_autoload.txt", v)
+            end
         end
     })
 
     TabConfig:Toggle({
-        Title = "Auto Load Config on Startup",
-        Desc = "Automatically loads selected configuration when script launches",
         ConfigKey = "AutoLoadConfig",
+        Title = "Load Profile at Startup",
+        Desc = "Loads the selected profile the next time the script starts.",
         Value = CFG.AutoLoadConfig,
         Callback = function(v)
             CFG.AutoLoadConfig = v
             if writefile then
-                pcall(writefile, CONFIG_FOLDER .. "/_autoload.txt", CFG.SelectedConfigName or "default")
+                pcall(writefile, CONFIG_FOLDER .. "/_autoload.txt", v and (CFG.SelectedConfigName or "default") or "")
             end
         end
     })
 
     TabConfig:Button({
-        Title = "Save to Selected Config",
-        Desc = "Writes current toggle states and parameters to file",
+        Title = "Save Profile",
+        Desc = "Saves the current settings to the selected profile.",
         Callback = function()
             saveConfigFile(CFG.SelectedConfigName or "default")
         end
     })
 
     TabConfig:Button({
-        Title = "Load Selected Config",
-        Desc = "Restores all settings from the selected file profile",
+        Title = "Load Profile",
+        Desc = "Loads saved settings and updates the controls to match.",
         Callback = function()
             loadConfigFile(CFG.SelectedConfigName or "default")
         end
     })
 
-    TabConfig:Section({ Title = "Create & Delete Configs" })
+    TabConfig:Section({ Title = "Profile Tools" })
 
     local newNameInput = ""
     TabConfig:Input({
-        Title = "New Config Name",
-        Desc = "Type a name for a new profile",
+        Title = "New Profile Name",
+        Desc = "Enter a name for the new settings profile.",
         Default = "",
         Placeholder = "e.g. SpeedFarming",
         Callback = function(txt)
@@ -9230,40 +10643,47 @@ do
     })
 
     TabConfig:Button({
-        Title = "Create New Config Profile",
-        Desc = "Creates a new config file and adds it to the profile list",
+        Title = "Create Profile",
+        Desc = "Saves current settings as a new profile.",
         Callback = function()
             if newNameInput and newNameInput ~= "" then
-                saveConfigFile(newNameInput)
                 CFG.SelectedConfigName = newNameInput
+                saveConfigFile(newNameInput)
                 local updatedList = getSavedConfigsList()
-                pcall(function() DropdownConfig:Refresh(updatedList); DropdownConfig:Set(CFG.SelectedConfigName or "default", true) end)
+                pcall(function() DropdownConfig:Refresh(updatedList) end)
             end
         end
     })
 
     TabConfig:Button({
-        Title = "Delete Selected Config Profile",
-        Desc = "Removes the selected config file permanently",
+        Title = "Delete Profile",
+        Desc = "Permanently deletes the selected profile. The default profile is protected.",
         Callback = function()
             if CFG.SelectedConfigName and CFG.SelectedConfigName ~= "default" then
                 deleteConfigFile(CFG.SelectedConfigName)
                 CFG.SelectedConfigName = "default"
                 local updatedList = getSavedConfigsList()
-                pcall(function() DropdownConfig:Refresh(updatedList); DropdownConfig:Set(CFG.SelectedConfigName or "default", true) end)
+                pcall(function() DropdownConfig:Refresh(updatedList) end)
             end
         end
     })
 
     TabConfig:Button({
-        Title = "Refresh Profiles List",
-        Desc = "Reloads all config files found in directory",
+        Title = "Refresh Profiles",
+        Desc = "Updates the list of saved profiles.",
         Callback = function()
             local updatedList = getSavedConfigsList()
-            pcall(function() DropdownConfig:Refresh(updatedList); DropdownConfig:Set(CFG.SelectedConfigName or "default", true) end)
+            pcall(function() DropdownConfig:Refresh(updatedList) end)
         end
     })
 end
 
+-- Initialize all 11 tabs sequentially in correct order
+for _, tabName in ipairs({"Dash", "Order", "Farm", "Events", "Spins", "Equip", "Cons", "Harbor", "Delete", "Player", "Config"}) do
+    if Tabs[tabName] then
+        Tabs[tabName](Window)
+    end
+end
+
 Window:FinishLoading()
-print("[Axel Hub] Anime Breaker loaded with AxelUI. Sticky target locking active.")
+print("[Axel Hub] Anime Breaker ready.")
