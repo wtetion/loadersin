@@ -69,59 +69,323 @@ end
 -- ══════════════════════════════════════════════════════════
 -- CONSTANTS & LOOKUPS
 -- ══════════════════════════════════════════════════════════
-local MAP_LIST = {"Lobby", "DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"}
+-- ══════════════════════════════════════════════════════════
+-- AUTO-UPDATE: DYNAMIC DATA LOADER
+-- Pulls all lists from game's own data modules at runtime.
+-- Fallback to hardcode if module unavailable.
+-- ══════════════════════════════════════════════════════════
 
-local ALL_RARITY_NAMES = {
-    "Common", "Rare", "Epic", "Legendary", "Mythical", "Secret", "Broken", "Portal", "Loot Box", "Exclusive", "RGB"
-}
+local _RS2 = game:GetService("ReplicatedStorage")
+local _FW2 = _RS2:FindFirstChild("Framework")
+local function _safeReq(mod) if not mod then return nil end; local ok,r=pcall(require,mod); return ok and r or nil end
+local function _modPath(name)
+    return _FW2 and _FW2:FindFirstChild("Modules") and
+           _FW2.Modules:FindFirstChild("Data") and
+           _FW2.Modules.Data:FindFirstChild(name)
+end
 
-local RARITY_LEVEL = {
-    Common = 1, Rare = 2, Epic = 3, Legendary = 4, Mythical = 5, Secret = 6, Broken = 7,
-    Portal = 8, ["Loot Box"] = 9, Exclusive = 10, RGB = 11
-}
+-- MAP_LIST — key ภายใน (DBZ, AOT...) เรียง Order จาก MapData
+local MAP_LIST do
+    local MapData = _safeReq(_modPath("MapData"))
+    local built = {}
+    if MapData and type(MapData) == "table" then
+        local t = {}
+        for k, v in pairs(MapData) do
+            if type(k) == "string" then
+                table.insert(t, {Key=k, Ord=(type(v)=="table" and tonumber(v.Order)) or 99})
+            end
+        end
+        table.sort(t, function(a,b) return a.Ord < b.Ord end)
+        for _, e in ipairs(t) do table.insert(built, e.Key) end
+    end
+    MAP_LIST = #built > 0 and built or
+        {"Lobby","DBZ","AOT","Naruto","Nanatsu","SoloLeveling","OnePiece","BlackClover"}
+end
 
-local TT_POTIONS = {
-    "EnergyPotion1", "DamagePotion1", "GoldPotion1", "LuckPotion1", "DropPotion1",
-    "EnergyPotion2", "DamagePotion2", "GoldPotion2", "LuckPotion2", "DropPotion2"
-}
+-- ALL_RARITY_NAMES + RARITY_LEVEL — จาก RarityData เรียง Order
+local ALL_RARITY_NAMES, RARITY_LEVEL do
+    local RarityData = _safeReq(_modPath("RarityData"))
+    local order = {}
+    if RarityData and type(RarityData) == "table" then
+        local t = {}
+        for k, v in pairs(RarityData) do
+            if type(k)=="string" then
+                table.insert(t, {Name=k, Ord=(type(v)=="table" and tonumber(v.Order)) or 99})
+            end
+        end
+        table.sort(t, function(a,b) return a.Ord < b.Ord end)
+        for _, e in ipairs(t) do table.insert(order, e.Name) end
+    end
+    if #order == 0 then
+        order = {"Common","Rare","Epic","Legendary","Mythical","Secret","Broken","Portal","Loot Box","Exclusive","RGB"}
+    end
+    ALL_RARITY_NAMES = order
+    RARITY_LEVEL = {}
+    for i, r in ipairs(order) do RARITY_LEVEL[r] = i end
+end
 
-local PIRATE_JUICES = {
-    "EnergyJuice1", "DamageJuice1", "GoldJuice1", "DropJuice1", "LuckJuice1"
-}
+-- RARITY_LEVEL ถูก define ข้างบนแล้ว (แยก block เดิมออก)
 
-local TT_TARGETS = {
-    { Key = "Energy",  Name = "Relentless (Energy)" },
-    { Key = "Damage",  Name = "Breaker (Damage)" },
-    { Key = "Gold",    Name = "Scavenger (Gold)" },
-    { Key = "AtkSPD",  Name = "Overdrive (AtkSPD)" },
-}
+-- TT_POTIONS — scan ShopData หา Potion
+local TT_POTIONS do
+    local ShopData = _safeReq(_modPath("ShopData"))
+    local found = {}
+    if ShopData then
+        local function scan(t)
+            for _, item in pairs(t) do
+                local id = (type(item)=="table" and (item.Id or item.Name)) or (type(item)=="string" and item) or nil
+                if id and id:find("Potion") and not table.find(found,id) then table.insert(found,id) end
+            end
+        end
+        local ttS = ShopData["TimeTrial"] or ShopData["TT"] or ShopData["TimeTrialShop"]
+        if ttS then scan(ttS) else for _,s in pairs(ShopData) do if type(s)=="table" then scan(s) end end end
+    end
+    TT_POTIONS = #found > 0 and found or {
+        "EnergyPotion1","DamagePotion1","GoldPotion1","LuckPotion1","DropPotion1",
+        "EnergyPotion2","DamagePotion2","GoldPotion2","LuckPotion2","DropPotion2"
+    }
+end
 
-local CRAFT_ITEMS = {
-    Ring    = {"EnergyRing1","EnergyRing2","EnergyRing3","EnergyRing4","EnergyRing5","EnergyRing6"},
-    Collar  = {"GoldCollar1","GoldCollar2","GoldCollar3","GoldCollar4","GoldCollar5","GoldCollar6"},
-    Earring = {"DamageEarring1","DamageEarring2","DamageEarring3","DamageEarring4","DamageEarring5","DamageEarring6"}
-}
+-- PIRATE_JUICES — scan ShopData หา Juice
+local PIRATE_JUICES do
+    local ShopData = _safeReq(_modPath("ShopData"))
+    local found = {}
+    if ShopData then
+        local function scan(t)
+            for _, item in pairs(t) do
+                local id = (type(item)=="table" and (item.Id or item.Name)) or (type(item)=="string" and item) or nil
+                if id and id:find("Juice") and not table.find(found,id) then table.insert(found,id) end
+            end
+        end
+        local pS = ShopData["Pirate"] or ShopData["PirateShop"] or ShopData["OnePiece"]
+        if pS then scan(pS) else for _,s in pairs(ShopData) do if type(s)=="table" then scan(s) end end end
+    end
+    PIRATE_JUICES = #found > 0 and found or {
+        "EnergyJuice1","DamageJuice1","GoldJuice1","DropJuice1","LuckJuice1"
+    }
+end
 
-local PROMO_CODES = {
-    "RELEASE", "UPDATE1", "UPDATE2", "CRAFT", "LIKES10K", "LIKES20K", "SORRYFORSHUTDOWN"
-}
+-- TT_TARGETS — จาก UpgradeData
+local TT_TARGETS do
+    local UpgradeData = _safeReq(_modPath("UpgradeData"))
+    local found = {}
+    local km = {Energy="Relentless",Damage="Breaker",Gold="Scavenger",AtkSPD="Overdrive"}
+    if UpgradeData then
+        local ttU = UpgradeData["TimeTrial"] or UpgradeData["TT"]
+        if ttU then
+            for k, v in pairs(ttU) do
+                local sk = (type(v)=="table" and (v.Stat or v.Key or k)) or k
+                local nm = (type(v)=="table" and (v.Name or v.DisplayName)) or (km[sk] and km[sk].." ("..sk..")") or sk
+                table.insert(found, {Key=sk, Name=nm})
+            end
+        end
+    end
+    TT_TARGETS = #found > 0 and found or {
+        {Key="Energy",Name="Relentless (Energy)"},{Key="Damage",Name="Breaker (Damage)"},
+        {Key="Gold",Name="Scavenger (Gold)"},{Key="AtkSPD",Name="Overdrive (AtkSPD)"},
+    }
+end
 
-local ALL_ENEMY_OPTIONS = {
-    "All",
-    "Master Inventor [ DBZ ]", "Namekian Healer [ DBZ ]", "Namekian Warrior [ DBZ ]", "Strongest Human [ DBZ ]",
-    "Hidden Potential [ DBZ ]", "Saiyan Prince [ DBZ ]", "Destructive Fist [ DBZ ]", "Shadow Tactician [ DBZ ]",
-    "Ace Captain [ AOT ]", "Ace Scout [ AOT ]", "Buzzcut Scout [ AOT ]", "Scout Potato [ AOT ]", 
-    "Scout Scientist [ AOT ]", "Tactical Scout [ AOT ]",
-    "Rogue Ninja [ Naruto ]", "Leaf Genin [ Naruto ]", "Sand Shinobi [ Naruto ]", "Nine Tails Clone [ Naruto ]",
-    "Holy Knight [ Nanatsu ]", "Demon Soldier [ Nanatsu ]", "Red Demon [ Nanatsu ]", "Gray Demon [ Nanatsu ]",
-    "Shadow Hunter [ SoloLeveling ]", "D-Rank Beast [ SoloLeveling ]", "C-Rank Beast [ SoloLeveling ]", "Igris Shadow [ SoloLeveling ]",
-    "Marine Recruit [ OnePiece ]", "Marine Captain [ OnePiece ]", "Pacifista [ OnePiece ]", "Admiral Candidate [ OnePiece ]"
-}
+-- CRAFT_ITEMS — scan CraftData/ItemData หา Ring/Collar/Earring
+local CRAFT_ITEMS do
+    local CraftData = _safeReq(_modPath("CraftData")) or _safeReq(_modPath("ItemData"))
+    local found = {Ring={}, Collar={}, Earring={}}
+    if CraftData then
+        local function tryAdd(id)
+            if not id or type(id)~="string" then return end
+            local l = id:lower()
+            if l:find("ring")    and not table.find(found.Ring,id)    then table.insert(found.Ring,id)    end
+            if l:find("collar")  and not table.find(found.Collar,id)  then table.insert(found.Collar,id)  end
+            if l:find("earring") and not table.find(found.Earring,id) then table.insert(found.Earring,id) end
+        end
+        for k, v in pairs(CraftData) do
+            if type(v)=="table" then tryAdd(v.Id or v.Name)
+                for _, item in pairs(v) do tryAdd((type(item)=="table" and (item.Id or item.Name)) or (type(item)=="string" and item)) end
+            else tryAdd(type(k)=="string" and k or nil) end
+        end
+    end
+    local any = false; for _, t in pairs(found) do if #t>0 then any=true; break end end
+    CRAFT_ITEMS = any and found or {
+        Ring    = {"EnergyRing1","EnergyRing2","EnergyRing3","EnergyRing4","EnergyRing5","EnergyRing6"},
+        Collar  = {"GoldCollar1","GoldCollar2","GoldCollar3","GoldCollar4","GoldCollar5","GoldCollar6"},
+        Earring = {"DamageEarring1","DamageEarring2","DamageEarring3","DamageEarring4","DamageEarring5","DamageEarring6"}
+    }
+end
+
+-- PROMO_CODES — จาก CodeData/Codes module
+local PROMO_CODES do
+    local CodeData = _safeReq(_modPath("CodeData")) or _safeReq(_modPath("PromoCodes")) or _safeReq(_modPath("Codes"))
+    local found = {}
+    if CodeData then
+        for k, v in pairs(CodeData) do
+            local code = (type(v)=="table" and (v.Code or v.Id or k)) or (type(k)=="string" and k) or nil
+            if code and type(code)=="string" and #code>0 then
+                local up = code:upper(); if not table.find(found,up) then table.insert(found,up) end
+            end
+        end
+    end
+    PROMO_CODES = #found > 0 and found or {
+        "RELEASE","UPDATE1","UPDATE2","CRAFT","LIKES10K","LIKES20K","SORRYFORSHUTDOWN"
+    }
+end
+
+-- ALL_ENEMY_OPTIONS — ดึงจาก EnemyData (flat: each entry มี .Name + .Map)
+-- Format: "Enemy Name [ MapKey ]" ตรงกับ internal key
+local function buildEnemyOptions()
+    local opts, seen = {"All"}, {}
+    local ok, EnemyData = pcall(function()
+        return require(game:GetService("ReplicatedStorage").Framework.Modules.Data.EnemyData)
+    end)
+    if ok and EnemyData then
+        local entries = {}
+        for _, v in pairs(EnemyData) do
+            if type(v)=="table" and v.Name and v.Map then
+                table.insert(entries, {Name=tostring(v.Name), Map=tostring(v.Map), Order=tonumber(v.Order) or 99})
+            end
+        end
+        -- sort ตาม MAP_LIST order (เหมือนลำดับแมพในเกม) แล้ว sub-sort ด้วย enemy Order
+        local mapIdx = {}; for i, m in ipairs(MAP_LIST) do mapIdx[m] = i end
+        table.sort(entries, function(a,b)
+            local ia = mapIdx[a.Map] or 999; local ib = mapIdx[b.Map] or 999
+            if ia ~= ib then return ia < ib end
+            return a.Order < b.Order
+        end)
+        for _, e in ipairs(entries) do
+            local d = e.Name.." [ "..e.Map.." ]"
+            if not seen[d] then seen[d]=true; table.insert(opts, d) end
+        end
+    end
+    -- fallback: workspace scan
+    if #opts <= 1 then
+        local srv = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Server")
+        if srv then
+            local function scan(f, tag)
+                for _, c in ipairs(f:GetChildren()) do
+                    if c:IsA("Folder") then scan(c, tag or c.Name)
+                    else
+                        local d = (c:GetAttribute("Name") or c.Name)..(tag and " [ "..tag.." ]" or "")
+                        if not seen[d] then seen[d]=true; table.insert(opts, d) end
+                    end
+                end
+            end
+            for _, mf in ipairs(srv:GetChildren()) do if mf:IsA("Folder") then scan(mf,mf.Name) end end
+        end
+    end
+    -- hardcode fallback (ข้อมูลจริงจากเกม update ล่าสุด)
+    if #opts <= 1 then opts = {"All",
+        "Master Inventor [ DBZ ]","Namekian Healer [ DBZ ]","Namekian Warrior [ DBZ ]","Strongest Human [ DBZ ]","Hidden Potential [ DBZ ]","Saiyan Prince [ DBZ ]",
+        "Ace Captain [ AOT ]","Ace Scout [ AOT ]","Buzzcut Scout [ AOT ]","Scout Potato [ AOT ]","Scout Scientist [ AOT ]","Tactical Scout [ AOT ]",
+        "Destructive Fist [ Naruto ]","Shadow Tactician [ Naruto ]","Copy Ninja [ Naruto ]","Gentle Fist [ Naruto ]","Slug Sannin [ Naruto ]","Akimichi Titan [ Naruto ]",
+        "Boar Sin [ Nanatsu ]","Fox Sin [ Nanatsu ]","Goat Sin [ Nanatsu ]","Grizzly Sin [ Nanatsu ]","Lion Sin [ Nanatsu ]","Serpent Sin [ Nanatsu ]",
+        "Stealth Assassin [ SoloLeveling ]","Surveillance Chief [ SoloLeveling ]","Sword Dancer [ SoloLeveling ]","The Goliath [ SoloLeveling ]","Veteran Hunter [ SoloLeveling ]","Weakest Hunter [ SoloLeveling ]",
+        "Black Leg [ OnePiece ]","Cat Burglar [ OnePiece ]","Fire Fist [ OnePiece ]","Pirate Hunter [ OnePiece ]","Sniper King [ OnePiece ]","Straw Hat [ OnePiece ]",
+        "Anti Magic [ BlackClover ]","Crimson Lion [ BlackClover ]","Dark Captain [ BlackClover ]","Sea Dragon [ BlackClover ]","Undefeated Lioness [ BlackClover ]","Wind Spirit [ BlackClover ]",
+    } end
+    return opts
+end
+local ALL_ENEMY_OPTIONS = buildEnemyOptions()
+_G._AnimeBreakerRefreshEnemies = buildEnemyOptions
 
 -- ══════════════════════════════════════════════════════════
+-- GACHA DYNAMIC DROPDOWNS: ดึง stop-tier options จาก GachaData
+-- Format ที่ใช้: "Name (Rarity+)" เรียงตาม Order
+-- ══════════════════════════════════════════════════════════
+local GACHA = {}
+do
+    local _GachaCache = nil
+    local function getGachaData()
+        if _GachaCache then return _GachaCache end
+        local ok, data = pcall(function()
+            return require(game:GetService("ReplicatedStorage").Framework.Modules.Data.GachaData)
+        end)
+        _GachaCache = (ok and data) or {}
+        return _GachaCache
+    end
+
+    local function buildGachaStops(gachaType, rarityMap)
+        local GD = getGachaData()
+        local entries = {}
+        for _, v in pairs(GD) do
+            if type(v)=="table" and v.Type==gachaType and v.Name and v.Rarity then
+                table.insert(entries, {
+                    Name   = tostring(v.Name),
+                    Rarity = tostring(v.Rarity),
+                    Order  = tonumber(v.Order) or 99
+                })
+            end
+        end
+        table.sort(entries, function(a,b) return a.Order < b.Order end)
+        local result = {"Any"}
+        local seenR = {}
+        for _, e in ipairs(entries) do
+            if not seenR[e.Rarity] then
+                seenR[e.Rarity] = true
+                local suffix = (rarityMap and rarityMap[e.Rarity]) or (e.Rarity.."+")
+                table.insert(result, e.Name.." ("..suffix..")")
+            end
+        end
+        return #result > 1 and result or {"Any"}
+    end
+
+    do
+        local GD = getGachaData()
+        local types, seen = {}, {}
+        for _, v in pairs(GD) do
+            if type(v)=="table" and v.Type and not seen[v.Type] then
+                seen[v.Type] = true; table.insert(types, tostring(v.Type))
+            end
+        end
+        table.sort(types)
+        GACHA.SUMMON_TYPES = #types > 0 and types or {"Pet","Race","Eye Technique"}
+    end
+
+    do
+        local r = {"Any"}
+        for _, rn in ipairs(ALL_RARITY_NAMES) do
+            if rn ~= "Common" then table.insert(r, rn.."+") end
+        end
+        GACHA.SUMMON_STOP_RARITIES = r
+    end
+
+    GACHA.TITAN_STOPS     = buildGachaStops("Titan",          {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.EYE_STOPS       = buildGachaStops("Eye Technique",  {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.SIN_STOPS       = buildGachaStops("Sin",            {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.HUNTER_STOPS    = buildGachaStops("Hunter Rank",    {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.SHADOW_STOPS    = buildGachaStops("Shadow Passive", {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.HERO_STOPS      = buildGachaStops("Hero Passive",   {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.WEAPON_P_STOPS  = buildGachaStops("Weapon Passive", {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.HAKI_STOPS      = buildGachaStops("Haki",           {Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+    GACHA.AMULET_STOPS    = buildGachaStops("Amulet Building",{Rare="Rare+",Epic="Epic+",Legendary="Legendary+",Mythical="Mythical+",Secret="Secret"})
+
+    do
+        local r = {"Any"}
+        for _, rn in ipairs(ALL_RARITY_NAMES) do
+            if rn ~= "Common" then table.insert(r, rn.."+") end
+        end
+        GACHA.WEAPON_T1_STOPS = r
+    end
+
+    do
+        local GD = getGachaData()
+        local cats, seen = {}, {}
+        for _, v in pairs(GD) do
+            if type(v)=="table" and v.Type=="Amulet Building" and v.Boost then
+                local b = tostring(v.Boost)
+                if not seen[b] then seen[b]=true; table.insert(cats, b) end
+            end
+        end
+        table.sort(cats)
+        GACHA.AMULET_CATEGORIES = #cats > 0 and cats or {"Energy","Gold","Damage"}
+    end
+end
+
+
 -- CONFIGURATION
 -- ══════════════════════════════════════════════════════════
 local TIMERS = {
+    wallAttackStartTime     = 0,
+    wallCooldownStartTime   = 0,
+    isAttackingWall         = false,
     lastClick = 0,
     lastSkill = 0,
     lastCraft = 0,
@@ -423,6 +687,12 @@ local raidEnteringTime = 0
 local wallAttackStartTime = 0
 local wallCooldownStartTime = 0
 local isAttackingWall = false
+
+local function resetWallBreakTimers()
+    isAttackingWall = false
+    wallAttackStartTime = 0
+    wallCooldownStartTime = 0
+end
 
 -- STICKY TARGET LOCK & COMBAT CIRCLE MULTI-TARGET COVERAGE
 local currentLockedTargetUID = nil
@@ -1756,6 +2026,7 @@ local function handleSmartWallBreaking(now)
 
     -- 1. If we are not in the latest unlocked area, warp to latest area first!
     if highestUnlocked and highestUnlocked ~= "Lobby" and highestUnlocked ~= curMap then
+        resetWallBreakTimers()
         if now - TIMERS.lastNewAreaTeleport >= 2.0 then
             TIMERS.lastNewAreaTeleport = now
             pcall(function()
@@ -1767,6 +2038,7 @@ local function handleSmartWallBreaking(now)
 
     -- 2. If the next map is already unlocked (wall broken), warp to the new latest area immediately!
     if isNextMapUnlocked(curMap) then
+        resetWallBreakTimers()
         local nextHighest = getHighestUnlockedMap()
         if nextHighest and nextHighest ~= "Lobby" and nextHighest ~= curMap then
             if now - TIMERS.lastNewAreaTeleport >= 2.0 then
@@ -1799,18 +2071,18 @@ local function handleSmartWallBreaking(now)
         hitWall()
         return true
     elseif CFG.WallBreakMode == "Timed" then
-        if not isAttackingWall and (now - wallCooldownStartTime >= CFG.WallFarmCooldown) then
-            isAttackingWall = true
-            wallAttackStartTime = now
+        if not TIMERS.isAttackingWall and (now - TIMERS.wallCooldownStartTime >= CFG.WallFarmCooldown) then
+            TIMERS.isAttackingWall = true
+            TIMERS.wallAttackStartTime = now
         end
 
-        if isAttackingWall then
-            if (now - wallAttackStartTime <= CFG.WallAttackDuration) then
+        if TIMERS.isAttackingWall then
+            if (now - TIMERS.wallAttackStartTime <= CFG.WallAttackDuration) then
                 hitWall()
                 return true
             else
-                isAttackingWall = false
-                wallCooldownStartTime = now
+                TIMERS.isAttackingWall = false
+                TIMERS.wallCooldownStartTime = now
             end
         end
     end
@@ -2217,64 +2489,68 @@ local function handleAutoReturnHome()
     end
 end
 
+local function normalizeTTDiff(d)
+    if not d then return "Easy" end
+    d = tostring(d)
+    if d == "Normal" then return "Medium" end
+    return d
+end
+
 local function doJoinTimeTrial(diff)
     if not (Library and Library.Remote) then return false end
+    diff = normalizeTTDiff(diff)
     local ok = pcall(function()
-        Library.Remote:Fire("GamemodeSystem", "Create", "Time Trial", "The Hallway", diff or "Easy", false)
-        Library.Remote:Fire("GamemodeSystem", "Enter", "Time Trial", "The Hallway", diff or "Easy", true)
-        Library.Remote:Fire("GamemodeSystem", "Start", "Time Trial", true)
+        Library.Remote:Fire("GamemodeSystem", "Enter", "Time Trial", "The Hallway", diff, true)
     end)
     return ok
 end
 
 local ttCurrentActiveDiff = nil
-local ttHasJoinedOnce = false
-local ttWasInsideLast = false
-local ttLastJoinOpensAt = nil  -- OpensAt ของ window ที่ join ไปแล้ว (ป้องกัน join ซ้ำใน window เดิม)
+local ttLastJoinedWindowId = nil
 
 local function getSelectedTTDiffs()
     local diffs = CFG.TTDifficulties or CFG.TTDifficulty
-    if type(diffs) == "string" and diffs ~= "" then return { diffs } end
+    if type(diffs) == "string" and diffs ~= "" then return { normalizeTTDiff(diffs) } end
     if type(diffs) == "table" then
         local list = {}
         for _, d in pairs(diffs) do
-            if type(d) == "string" and d ~= "" then table.insert(list, d) end
+            if type(d) == "string" and d ~= "" then table.insert(list, normalizeTTDiff(d)) end
         end
         return #list > 0 and list or { "Easy" }
     end
     return { "Easy" }
 end
 
--- Require GamemodeService ที่ทำงานได้จริง (Library.GamemodeService = nil ใน game นี้)
+-- Require GamemodeService
 local _GamemodeSvc = nil
 pcall(function()
     _GamemodeSvc = require(game:GetService("ReplicatedStorage").Framework.Modules.Services.GamemodeService)
 end)
 
--- คืนค่า diff + windowEpoch เมื่อ TT เปิดจริง (IsOpen = true + ไม่อยู่ใน server CD)
+-- คืนค่า diff + windowId ถ้า TT เปิดจริง (IsOpen = true + ไม่มี server CD)
 local function getTTOpenWindow()
     local gms = _GamemodeSvc
     local nowTick = os.time()
-
-    -- epoch ทุก 30 นาที → ป้องกัน join ซ้ำใน window เดิม
-    local windowEpoch = math.floor(nowTick / 1800)
-
     local pd = Library and Library.PlayerData
 
-    for _, diff in ipairs(getSelectedTTDiffs()) do
+    for _, rawDiff in ipairs(getSelectedTTDiffs()) do
+        local diff = normalizeTTDiff(rawDiff)
         local isOpen = false
+        local win = nil
+
         if gms and gms.IsOpen then
-            local ok, res = pcall(function()
-                return gms:IsOpen("Time Trial", "The Hallway", diff)
+            local ok, openRes, winRes = pcall(function()
+                return gms.IsOpen("Time Trial", "The Hallway", diff)
             end)
-            isOpen = ok and res == true
+            if ok then
+                isOpen = (openRes == true)
+                win = winRes
+            end
         else
-            -- fallback: สมมติว่าเปิดตลอด (ไม่มี API)
             isOpen = true
         end
 
         if isOpen then
-            -- เช็ค server-side cooldown
             local onCooldown = false
             if pd and pd.Gamemodes and pd.Gamemodes["Time Trial"] then
                 local cd = pd.Gamemodes["Time Trial"].Cooldown
@@ -2282,8 +2558,11 @@ local function getTTOpenWindow()
                     onCooldown = true
                 end
             end
+
             if not onCooldown then
-                return diff, windowEpoch
+                local windowId = (win and win.OpensAt and (tostring(win.OpensAt) .. "_" .. diff))
+                                 or (tostring(math.floor(nowTick / 60)) .. "_" .. diff)
+                return diff, windowId
             end
         end
     end
@@ -2292,11 +2571,8 @@ end
 
 local function handleTimeTrialLoop(now)
     if not CFG.AutoTimeTrialDungeon then
-        -- toggle ปิด → reset state (ไม่ต้องปิด toggle เอง)
         ttCurrentActiveDiff = nil
-        ttHasJoinedOnce = false
-        ttWasInsideLast = false
-        ttLastJoinOpensAt = nil
+        ttLastJoinedWindowId = nil
         return false
     end
 
@@ -2306,34 +2582,28 @@ local function handleTimeTrialLoop(now)
     local inTT = isPlayerInTimeTrial()
 
     if not inTT then
-        -- เพิ่งออกจาก TT → reset ให้พร้อม join รอบถัดไป
-        if ttWasInsideLast then
-            ttWasInsideLast = false
-            ttHasJoinedOnce = false
-            ttCurrentActiveDiff = nil
-        end
-
-        -- เช็ค window ทุก Heartbeat — join ทันทีเมื่อ Open == true และ OpensAt ใหม่
-        if not ttHasJoinedOnce then
-            local diff, opnsAt = getTTOpenWindow()
-            if diff and opnsAt ~= ttLastJoinOpensAt then
-                if now - TIMERS.lastTimeTrialJoinAttempt >= 3.0 then
-                    TIMERS.lastTimeTrialJoinAttempt = now
-                    if doJoinTimeTrial(diff) then
-                        ttHasJoinedOnce = true
-                        ttLastJoinOpensAt = opnsAt
-                        ttCurrentActiveDiff = diff
-                    end
-                end
+        -- ตรวจว่ามี Time Trial ห้องไหนเปิดอยู่หรือไม่
+        local diff, winId = getTTOpenWindow()
+        if diff and winId and winId ~= ttLastJoinedWindowId then
+            if now - TIMERS.lastTimeTrialJoinAttempt >= 2.0 then
+                TIMERS.lastTimeTrialJoinAttempt = now
+                ttCurrentActiveDiff = diff
+                doJoinTimeTrial(diff)
             end
         end
-        return false  -- ฟาร์ม normal world ระหว่างรอ window
+        return false
     end
 
-    -- อยู่ใน TT
-    ttWasInsideLast = true
-    ttHasJoinedOnce = false
-
+    -- อยู่ใน Time Trial แล้ว บันทึกว่าเข้ารอบนี้แล้ว
+    if ttCurrentActiveDiff then
+        local gms = _GamemodeSvc
+        local ok, _, win = pcall(function()
+            return gms.IsOpen("Time Trial", "The Hallway", ttCurrentActiveDiff)
+        end)
+        if ok and win and win.OpensAt then
+            ttLastJoinedWindowId = tostring(win.OpensAt) .. "_" .. ttCurrentActiveDiff
+        end
+    end
     -- Exit เมื่อถึง Target Exit Stage (slider)
     if CFG.TTCustomExitStage then
         local currentStage = getCurrentGamemodeStage()
@@ -9335,7 +9605,7 @@ Tabs.Farm = function(win)
         ConfigKey = "IndexFarmWorld",
         Title = "Avatar Index World",
         Desc = "Choose the world to visit and farm for missing avatars.",
-        Values = {"Current Map", "DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
+        Values = (function() local v={"Current Map"}; for _,m in ipairs(MAP_LIST) do if m~="Lobby" then table.insert(v,m) end end; return v end)(),
         Value = CFG.IndexFarmWorld or "Current Map",
         Callback = function(v)
             CFG.IndexFarmWorld = v
@@ -9366,6 +9636,7 @@ Tabs.Farm = function(win)
         Value = CFG.AutoBreakWall,
         Callback = function(v)
             CFG.AutoBreakWall = v
+            resetWallBreakTimers()
             if v then
                 local highest = getHighestUnlockedMap()
                 if highest and highest ~= "Lobby" and highest ~= getCurrentMap() then
@@ -9382,7 +9653,10 @@ Tabs.Farm = function(win)
         Desc = "Timed alternates gate attacks with farming. Continuous keeps attacking the gate.",
         Values = {"Timed", "Continuous"},
         Value = CFG.WallBreakMode,
-        Callback = function(v) CFG.WallBreakMode = v end
+        Callback = function(v)
+            CFG.WallBreakMode = v
+            resetWallBreakTimers()
+        end
     })
     TabFarm:Slider({
         ConfigKey = "WallAttackDuration",
@@ -9390,7 +9664,10 @@ Tabs.Farm = function(win)
         Desc = "How long to attack the gate before returning to farm in Timed mode.",
         Step = 5,
         Value = { Min = 5, Max = 180, Default = CFG.WallAttackDuration },
-        Callback = function(v) CFG.WallAttackDuration = v end
+        Callback = function(v)
+            CFG.WallAttackDuration = v
+            resetWallBreakTimers()
+        end
     })
     TabFarm:Slider({
         ConfigKey = "WallFarmCooldown",
@@ -9398,7 +9675,10 @@ Tabs.Farm = function(win)
         Desc = "How long to farm between gate attacks in Timed mode.",
         Step = 10,
         Value = { Min = 10, Max = 600, Default = CFG.WallFarmCooldown },
-        Callback = function(v) CFG.WallFarmCooldown = v end
+        Callback = function(v)
+            CFG.WallFarmCooldown = v
+            resetWallBreakTimers()
+        end
     })
 
     TabFarm:Section({ Title = "Auto Quests" })
@@ -9441,10 +9721,10 @@ Tabs.Events = function(win)
         Title = "Trial Difficulties",
         Desc = "Choose which difficulties to enter when their trial window opens.",
         Multi = true,
-        Values = {"Easy", "Normal", "Hard"},
-        Value = CFG.TTDifficulties or (type(CFG.TTDifficulty) == "table" and CFG.TTDifficulty) or { "Easy" },
+        Values = {"Easy", "Medium", "Hard"},
+        Value = (function() local raw = CFG.TTDifficulties or (type(CFG.TTDifficulty) == "table" and CFG.TTDifficulty) or { "Easy" }; local clean = {}; for _, v in ipairs(type(raw) == "table" and raw or { raw }) do table.insert(clean, (v == "Normal" and "Medium") or v) end; return #clean > 0 and clean or { "Easy" } end)(),
         Callback = function(v)
-            CFG.TTDifficulties = v
+            local clean = {}; for _, d in ipairs(type(v) == "table" and v or { v }) do table.insert(clean, (d == "Normal" and "Medium") or d) end; CFG.TTDifficulties = clean; CFG.TTDifficulty = clean
             CFG.TTDifficulty = v
         end
     })
@@ -9506,7 +9786,7 @@ Tabs.Events = function(win)
         ConfigKey = "RaidTargetMap",
         Title = "Raid World",
         Desc = "Choose the world used for raid entry and ticket farming.",
-        Values = {"DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
+        Values = (function() local v={}; for _,m in ipairs(MAP_LIST) do if m~="Lobby" then table.insert(v,m) end end; return v end)(),
         Value = CFG.RaidTargetMap,
         Callback = function(v)
             CFG.RaidTargetMap = v
@@ -9652,7 +9932,7 @@ Tabs.Spins = function(win)
         ConfigKey = "SummonEgg",
         Title = "Summon World",
         Desc = "Choose the world banner to use for summons.",
-        Values = {"DBZ", "AOT", "Naruto", "Nanatsu", "SoloLeveling", "OnePiece"},
+        Values = (function() local v={}; for _,m in ipairs(MAP_LIST) do if m~="Lobby" then table.insert(v,m) end end; return v end)(),
         Value = CFG.SummonEgg,
         Callback = function(v) CFG.SummonEgg = v end
     })
@@ -9660,7 +9940,7 @@ Tabs.Spins = function(win)
         ConfigKey = "SummonType",
         Title = "Summon Category",
         Desc = "Choose the item category to summon.",
-        Values = {"Pet", "Race", "Eye Technique"},
+        Values = GACHA.SUMMON_TYPES,
         Value = CFG.SummonType,
         Callback = function(v) CFG.SummonType = v end
     })
@@ -9668,7 +9948,7 @@ Tabs.Spins = function(win)
         ConfigKey = "SummonStopRarity",
         Title = "Summon Stop Rarity",
         Desc = "Stops Auto Summon at this rarity or higher. Any keeps summoning.",
-        Values = {"Any", "Rare+", "Epic+", "Legendary+", "Mythical+", "Secret", "Broken", "Exclusive"},
+        Values = GACHA.SUMMON_STOP_RARITIES,
         Value = CFG.SummonStopRarity or "Mythical+",
         Callback = function(v) CFG.SummonStopRarity = v end
     })
@@ -9731,7 +10011,7 @@ Tabs.Spins = function(win)
         ConfigKey = "TitanStopRarity",
         Title = "Titan Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Armored Titan (Rare+)", "Beast Titan (Epic+)", "Colossal Titan (Legendary+)", "Attack Titan (Mythical+)", "Founding Titan (Secret)"},
+        Values = GACHA.TITAN_STOPS,
         Value = CFG.TitanStopRarity or "Founding Titan (Secret)",
         Callback = function(v) CFG.TitanStopRarity = v end
     })
@@ -9755,7 +10035,7 @@ Tabs.Spins = function(win)
         ConfigKey = "WeaponT1StopRarity",
         Title = "Weapon T1 Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Rare+", "Epic+", "Legendary+", "Mythical+", "Secret"},
+        Values = GACHA.WEAPON_T1_STOPS,
         Value = CFG.WeaponT1StopRarity or "Mythical+",
         Callback = function(v) CFG.WeaponT1StopRarity = v end
     })
@@ -9779,7 +10059,7 @@ Tabs.Spins = function(win)
         ConfigKey = "TargetHeroPassive",
         Title = "Hero Passive Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Bone Breaker (Rare+)", "Wall Breaker (Epic+)", "Limit Breaker (Legendary+)", "Soul Breaker (Mythical+)", "World Breaker (Secret)"},
+        Values = GACHA.HERO_STOPS,
         Value = CFG.TargetHeroPassive or "Soul Breaker (Mythical+)",
         Callback = function(v) CFG.TargetHeroPassive = v end
     })
@@ -9803,7 +10083,7 @@ Tabs.Spins = function(win)
         ConfigKey = "EyeStopRarity",
         Title = "Eye Technique Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Sharingan (Rare+)", "Mangekyou Sharingan (Epic+)", "Eternal Mangekyou Sharingan (Legendary+)", "Rinnegan (Mythical+)", "Rinne Sharingan (Secret)"},
+        Values = GACHA.EYE_STOPS,
         Value = CFG.EyeStopRarity or "Rinnegan (Mythical+)",
         Callback = function(v) CFG.EyeStopRarity = v end
     })
@@ -9827,7 +10107,7 @@ Tabs.Spins = function(win)
         ConfigKey = "SinStopRarity",
         Title = "Sin Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Greed (Rare+)", "Sloth (Epic+)", "Gluttony (Legendary+)", "Pride (Mythical+)", "Wrath (Secret)"},
+        Values = GACHA.SIN_STOPS,
         Value = CFG.SinStopRarity or "Pride (Mythical+)",
         Callback = function(v) CFG.SinStopRarity = v end
     })
@@ -9851,7 +10131,7 @@ Tabs.Spins = function(win)
         ConfigKey = "HunterRankStopRarity",
         Title = "Hunter Rank Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "D-Rank (Rare+)", "C-Rank (Epic+)", "B-Rank (Legendary+)", "A-Rank (Mythical+)", "S-Rank (Secret)"},
+        Values = GACHA.HUNTER_STOPS,
         Value = CFG.HunterRankStopRarity or "A-Rank (Mythical+)",
         Callback = function(v) CFG.HunterRankStopRarity = v end
     })
@@ -9875,7 +10155,7 @@ Tabs.Spins = function(win)
         ConfigKey = "ShadowPassiveStopRarity",
         Title = "Shadow Passive Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Elite (Rare+)", "Knight (Epic+)", "Commander (Legendary+)", "Marshal (Mythical+)", "Monarch (Secret)"},
+        Values = GACHA.SHADOW_STOPS,
         Value = CFG.ShadowPassiveStopRarity or "Marshal (Mythical+)",
         Callback = function(v) CFG.ShadowPassiveStopRarity = v end
     })
@@ -9899,7 +10179,7 @@ Tabs.Spins = function(win)
         ConfigKey = "TargetWeaponPassive",
         Title = "Weapon Passive Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Fine Grade (Rare+)", "Skillful Grade (Epic+)", "Great Grade (Legendary+)", "Supreme Grade (Mythical+)", "Black Blade (Secret)"},
+        Values = GACHA.WEAPON_P_STOPS,
         Value = CFG.TargetWeaponPassive or "Supreme Grade (Mythical+)",
         Callback = function(v) CFG.TargetWeaponPassive = v end
     })
@@ -9923,7 +10203,7 @@ Tabs.Spins = function(win)
         ConfigKey = "HakiStopRarity",
         Title = "Haki Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Armament (Rare+)", "Future Sight (Epic+)", "Emission (Legendary+)", "Conqueror (Mythical+)", "Supreme King (Secret)"},
+        Values = GACHA.HAKI_STOPS,
         Value = CFG.HakiStopRarity or "Conqueror (Mythical+)",
         Callback = function(v) CFG.HakiStopRarity = v end
     })
@@ -9947,7 +10227,7 @@ Tabs.Spins = function(win)
         ConfigKey = "AmuletCategory",
         Title = "Amulet Boost",
         Desc = "Choose the amulet boost to roll and check against the stop tier.",
-        Values = {"Energy", "Gold", "Damage"},
+        Values = GACHA.AMULET_CATEGORIES,
         Value = CFG.AmuletCategory or "Energy",
         Callback = function(v) CFG.AmuletCategory = v end
     })
@@ -9955,7 +10235,7 @@ Tabs.Spins = function(win)
         ConfigKey = "AmuletStopRarity",
         Title = "Amulet Stop Tier",
         Desc = "Stops auto spin at this tier or higher. Any keeps rolling.",
-        Values = {"Any", "Tier II (Rare+)", "Tier III (Epic+)", "Tier IV (Legendary+)", "Tier V (Mythical+)", "Tier VI (Secret)"},
+        Values = GACHA.AMULET_STOPS,
         Value = CFG.AmuletStopRarity or "Tier V (Mythical+)",
         Callback = function(v) CFG.AmuletStopRarity = v end
     })
@@ -10707,11 +10987,13 @@ Tabs.Config = function(win)
 end
 
 -- Initialize all 11 tabs sequentially in correct order
+(function()
 for _, tabName in ipairs({"Dash", "Order", "Farm", "Events", "Spins", "Equip", "Cons", "Harbor", "Delete", "Player", "Config"}) do
     if Tabs[tabName] then
         Tabs[tabName](Window)
     end
 end
+end)()
 
 Window:FinishLoading()
 print("[Axel Hub] Anime Breaker ready.")
