@@ -8955,29 +8955,13 @@ function AxelUI.new(options)
     function self:FinishLoading()
         if self._destroyed or self._loadingFinished then return false end
         self._loadingFinished = true
-        local minDisplay = self.ReduceEffects and 0.12 or 0.72
-        local remaining = math.max(0, minDisplay - (os.clock() - (self._loadingStartedAt or os.clock())))
-        task.delay(remaining, function()
-            if self._destroyed or not overlay.Parent then return end
-            if self.ReduceEffects then
-                overlay:Destroy()
-                self._loadingOverlay = nil
-                return
-            end
-            tween(loaderScale, { Scale = 0.94 }, 0.16, Enum.EasingStyle.Quad)
-            tween(overlay, { BackgroundTransparency = 1 }, 0.28)
-            tween(loaderCard, { BackgroundTransparency = 1 }, 0.22)
-            fadeIcon(overlayIcon, 0.2)
-            tween(loadingTitle, { TextTransparency = 1 }, 0.2)
-            tween(loadingText, { TextTransparency = 1 }, 0.2)
-            tween(loadingHint, { TextTransparency = 1 }, 0.2)
-            tween(loadingBar, { BackgroundTransparency = 1 }, 0.2)
-            tween(loadingFill, { BackgroundTransparency = 1 }, 0.2)
-            task.delay(0.3, function()
-                if overlay.Parent then overlay:Destroy() end
-                if self._loadingOverlay == overlay then self._loadingOverlay = nil end
-            end)
-        end)
+        pcall(function() self:SetStatus("Online", self.Theme.Success) end)
+        if overlay then
+            pcall(function() overlay.Visible = false end)
+            pcall(function() overlay.Parent = nil end)
+            pcall(function() overlay:Destroy() end)
+        end
+        self._loadingOverlay = nil
         return true
     end
     if options.ManualLoading ~= true then
@@ -8986,6 +8970,9 @@ function AxelUI.new(options)
             if not self._loadingFinished and not self._destroyed then self:FinishLoading() end
         end)
     end
+    task.delay(4, function()
+        if not self._loadingFinished and not self._destroyed then self:FinishLoading() end
+    end)
 
     if self.StartMinimized then
         self._open = false
@@ -9118,7 +9105,8 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
         Logo = "star", Size = UDim2.fromOffset(926, 616), Theme = theme,
         Glass = { Enabled = true, Transparency = 0.24, AnimatedBorder = true },
         TabAnimation = true, AnimateControls = true,
-        ManualLoading = true, LoadingSubtitle = "Preparing Axel Hub",
+        ManualLoading = true,
+        LoadingSubtitle = "Preparing Axel Hub",
     })
     raw.StatusDot.BackgroundTransparency = 0
     raw:SetStatus("Loading", raw.Theme.Warning)
@@ -9322,17 +9310,20 @@ local function createAxelAnimeBreakerUI(AxelUI, CFG, getLibrary, getMap, getHigh
     function ui:FinishLoading()
         if self.Ready or raw._destroyed then return end
         self.Ready = true
-        self:SyncConfig()
-        raw:SelectTab(home)
-        if home.Pills and home.Pills[1] then home:SelectPill(home.Pills[1], true) end
-        if home.PillBar then home.PillBar.CanvasPosition = Vector2.new(0, 0) end
-        raw:_applyResponsive()
-        task.defer(function()
-            RunService.RenderStepped:Wait()
-            if raw._destroyed then return end
-            raw:SetStatus("Online", raw.Theme.Success)
-            raw:FinishLoading()
-        end)
+        pcall(function() self:SyncConfig() end)  -- pcall: a bad handle must not block loading
+        pcall(function() raw:SelectTab(home) end)
+        if home.Pills and home.Pills[1] then pcall(function() home:SelectPill(home.Pills[1], true) end) end
+        if home.PillBar then pcall(function() home.PillBar.CanvasPosition = Vector2.new(0, 0) end) end
+        pcall(function() raw:_applyResponsive() end)
+        pcall(function() raw:SetStatus("Online", raw.Theme.Success) end)
+        pcall(function() raw:FinishLoading() end)
+        if raw._loadingOverlay then
+            pcall(function() raw._loadingOverlay.Visible = false end)
+            pcall(function() raw._loadingOverlay.Parent = nil end)
+            pcall(function() raw._loadingOverlay:Destroy() end)
+            raw._loadingOverlay = nil
+            raw._loadingFinished = true
+        end
     end
 
     local elapsed = 0
@@ -9404,19 +9395,23 @@ end
 syncRuntimeSettings()
 
 if lp then
-    _G.AnimeBreaker_AntiAFKConnection = lp.Idled:Connect(function()
-        if not CFG.AntiAFK then return end
-        pcall(function()
-            local virtualUser = game:GetService("VirtualUser")
-            virtualUser:CaptureController()
-            virtualUser:ClickButton2(Vector2.new(0, 0))
+    pcall(function()
+        _G.AnimeBreaker_AntiAFKConnection = lp.Idled:Connect(function()
+            if not CFG.AntiAFK then return end
+            pcall(function()
+                local virtualUser = game:GetService("VirtualUser")
+                virtualUser:CaptureController()
+                virtualUser:ClickButton2(Vector2.new(0, 0))
+            end)
         end)
     end)
-    local coreGui = game:GetService("CoreGui")
-    _G.AnimeBreaker_RejoinConnection = coreGui.DescendantAdded:Connect(function(item)
-        if not CFG.AutoRejoin or item.Name ~= "ErrorPrompt" then return end
-        task.delay(3, function()
-            if CFG.AutoRejoin and item.Parent then doRejoinCurrent() end
+    pcall(function()
+        local coreGui = game:GetService("CoreGui")
+        _G.AnimeBreaker_RejoinConnection = coreGui.DescendantAdded:Connect(function(item)
+            if not CFG.AutoRejoin or item.Name ~= "ErrorPrompt" then return end
+            task.delay(3, function()
+                if CFG.AutoRejoin and item.Parent then doRejoinCurrent() end
+            end)
         end)
     end)
 end
@@ -11067,14 +11062,29 @@ Tabs.Config = function(win)
     })
 end
 
--- Initialize all 11 tabs sequentially in correct order
-(function()
-for _, tabName in ipairs({"Dash", "Order", "Farm", "Events", "Spins", "Equip", "Cons", "Harbor", "Delete", "Player", "Config"}) do
+-- Initialize all tabs synchronously so Real Executor / all environments load instantly without thread death
+local TAB_ORDER = {"Dash","Order","Farm","Events","Spins","Equip","Cons","Harbor","Delete","Player","Config"}
+
+for _, tabName in ipairs(TAB_ORDER) do
     if Tabs[tabName] then
-        Tabs[tabName](Window)
+        local ok, err = pcall(Tabs[tabName], Window)
+        if not ok then
+            warn("[Axel Hub] Tab " .. tostring(tabName) .. " error: " .. tostring(err))
+        end
     end
 end
-end)()
 
-Window:FinishLoading()
+-- Immediately finish loading and ensure overlay is gone
+pcall(function() Window:FinishLoading() end)
+pcall(function() Window.Raw:FinishLoading() end)
+pcall(function()
+    local ov = Window.Raw and Window.Raw._loadingOverlay
+    if ov then
+        ov.Visible = false
+        pcall(function() ov.Parent = nil end)
+        pcall(function() ov:Destroy() end)
+        Window.Raw._loadingOverlay = nil
+        Window.Raw._loadingFinished = true
+    end
+end)
 print("[Axel Hub] Anime Breaker ready.")
