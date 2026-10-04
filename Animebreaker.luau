@@ -1227,6 +1227,18 @@ local function isCurrentTargetStillAlive()
         local hp = sObj:GetAttribute("HP") or 0
         local dead = sObj:GetAttribute("Dead")
         if hp <= 0 or dead == true then return nil end
+
+        -- VALIDATE GAMEMODE vs OVERWORLD CONTEXT:
+        local mode, inMode = getActiveGamemode()
+        local gmFolder = serverEnemies:FindFirstChild("Gamemode")
+        local isGamemodeMob = gmFolder and sObj:IsDescendantOf(gmFolder)
+        if (not mode and not inMode) and isGamemodeMob then
+            return nil
+        end
+        if (mode or inMode) and not isGamemodeMob then
+            return nil
+        end
+
         local cObj = clientEnemies:FindFirstChild(uid)
         local root = cObj and (cObj:FindFirstChild("HumanoidRootPart") or cObj:FindFirstChildWhichIsA("BasePart"))
         if not root and sObj:IsA("BasePart") then root = sObj end
@@ -1803,6 +1815,22 @@ local function selectTargetEnemy()
         end
     end
 
+    -- 0.8. AUTO GO NEW AREA: If we unlocked a newer area, warp IMMEDIATELY and drop old map target lock!
+    local curMap = getCurrentMap()
+    local highestUnlocked = getHighestUnlockedMap()
+    if CFG.AutoGoNewArea and highestUnlocked and highestUnlocked ~= "Lobby" and curMap ~= highestUnlocked then
+        currentLockedTargetUID = nil
+        currentCoveredTargetUIDs = {}
+        if os.clock() - TIMERS.lastNewAreaTeleport >= 1.0 then
+            TIMERS.lastNewAreaTeleport = os.clock()
+            pcall(function()
+                Library.Remote:Fire("TeleportSystem", "To", highestUnlocked)
+            end)
+        end
+        -- Do not attack old map mob while waiting for warp!
+        return nil, nil, nil, nil, {}
+    end
+
     -- 1. STICKY TARGET CHECK: If locked target is still alive, KEEP IT!
     local stillAlive, lockedUID, lockedPart, lockedModel = isCurrentTargetStillAlive()
     if stillAlive then
@@ -1874,22 +1902,24 @@ local function selectTargetEnemy()
     end
 
     local enemies = getMapEnemies(targetMap)
-    if #enemies == 0 and targetMap ~= curMap then
-        targetMap = curMap
-        enemies = getMapEnemies(targetMap)
-    end
-    if #enemies == 0 then
-        for _, m in ipairs(MAP_LIST) do
-            local eList = getMapEnemies(m)
-            if #eList > 0 then
-                enemies = eList
-                break
+    -- If AutoGoNewArea is on and we are in targetMap, DO NOT fallback to old maps!
+    if #enemies == 0 and not CFG.AutoGoNewArea then
+        if targetMap ~= curMap then
+            targetMap = curMap
+            enemies = getMapEnemies(targetMap)
+        end
+        if #enemies == 0 then
+            for _, m in ipairs(MAP_LIST) do
+                local eList = getMapEnemies(m)
+                if #eList > 0 then
+                    enemies = eList
+                    break
+                end
             end
         end
-    end
-    if #enemies == 0 then
-        -- Final fallback: scan any alive monster in the server
-        enemies = getMapEnemies("All")
+        if #enemies == 0 then
+            enemies = getMapEnemies("All")
+        end
     end
     if #enemies == 0 then return nil, nil, nil, nil, {} end
 
@@ -2027,28 +2057,32 @@ local function handleSmartWallBreaking(now)
     -- 1. If we are not in the latest unlocked area, warp to latest area first!
     if highestUnlocked and highestUnlocked ~= "Lobby" and highestUnlocked ~= curMap then
         resetWallBreakTimers()
-        if now - TIMERS.lastNewAreaTeleport >= 2.0 then
+        currentLockedTargetUID = nil
+        currentCoveredTargetUIDs = {}
+        if now - TIMERS.lastNewAreaTeleport >= 1.0 then
             TIMERS.lastNewAreaTeleport = now
             pcall(function()
                 Library.Remote:Fire("TeleportSystem", "To", highestUnlocked)
             end)
         end
-        return false
+        return true
     end
 
     -- 2. If the next map is already unlocked (wall broken), warp to the new latest area immediately!
     if isNextMapUnlocked(curMap) then
         resetWallBreakTimers()
+        currentLockedTargetUID = nil
+        currentCoveredTargetUIDs = {}
         local nextHighest = getHighestUnlockedMap()
         if nextHighest and nextHighest ~= "Lobby" and nextHighest ~= curMap then
-            if now - TIMERS.lastNewAreaTeleport >= 2.0 then
+            if now - TIMERS.lastNewAreaTeleport >= 1.0 then
                 TIMERS.lastNewAreaTeleport = now
                 pcall(function()
                     Library.Remote:Fire("TeleportSystem", "To", nextHighest)
                 end)
             end
+            return true
         end
-        return false
     end
 
     -- 3. We are in the latest area and the wall is locked: break it!
@@ -2366,8 +2400,20 @@ local function getCurrentGamemodeStage()
 end
 
 local function executeGamemodeQuit()
+    currentLockedTargetUID = nil
+    currentCoveredTargetUIDs = {}
+    if getgenv then
+        getgenv()._CurrentLockedUID = nil
+        getgenv()._CurrentCoveredUIDs = {}
+    end
     pcall(function()
         Library.Remote:Fire("GamemodeSystem", "Quit")
+    end)
+    task.delay(0.5, function()
+        local highest = getHighestUnlockedMap()
+        if highest and highest ~= "Lobby" and highest ~= getCurrentMap() then
+            pcall(function() Library.Remote:Fire("TeleportSystem", "To", highest) end)
+        end
     end)
     pcall(function()
         local gmScreen = Library and Library.GetScreen and Library:GetScreen("Gamemode")
@@ -2500,6 +2546,7 @@ local function doJoinTimeTrial(diff)
     if not (Library and Library.Remote) then return false end
     diff = normalizeTTDiff(diff)
     local ok = pcall(function()
+        Library.Remote:Fire("GamemodeSystem", "Enter", "Time Trial", "The Hallway", diff)
         Library.Remote:Fire("GamemodeSystem", "Enter", "Time Trial", "The Hallway", diff, true)
     end)
     return ok
@@ -2582,11 +2629,27 @@ local function handleTimeTrialLoop(now)
     local inTT = isPlayerInTimeTrial()
 
     if not inTT then
-        -- ตรวจว่ามี Time Trial ห้องไหนเปิดอยู่หรือไม่
+        -- หลุด/ออก มาจาก Time Trial เคลียร์เป้าหมายทันที
+        if ttWasInsideLast then
+            ttWasInsideLast = false
+            currentLockedTargetUID = nil
+            currentCoveredTargetUIDs = {}
+            if getgenv then
+                getgenv()._CurrentLockedUID = nil
+                getgenv()._CurrentCoveredUIDs = {}
+            end
+            local highest = getHighestUnlockedMap()
+            if highest and highest ~= "Lobby" and highest ~= getCurrentMap() then
+                pcall(function() Library.Remote:Fire("TeleportSystem", "To", highest) end)
+            end
+        end
+
+        -- ตรวจว่ามี Time Trial ห้องใหม่เปิดอยู่หรือไม่ (winId ไม่ซ้ำรอบที่เพิ่งเข้า)
         local diff, winId = getTTOpenWindow()
         if diff and winId and winId ~= ttLastJoinedWindowId then
             if now - TIMERS.lastTimeTrialJoinAttempt >= 2.0 then
                 TIMERS.lastTimeTrialJoinAttempt = now
+                ttLastJoinedWindowId = winId
                 ttCurrentActiveDiff = diff
                 doJoinTimeTrial(diff)
             end
@@ -2594,16 +2657,9 @@ local function handleTimeTrialLoop(now)
         return false
     end
 
-    -- อยู่ใน Time Trial แล้ว บันทึกว่าเข้ารอบนี้แล้ว
-    if ttCurrentActiveDiff then
-        local gms = _GamemodeSvc
-        local ok, _, win = pcall(function()
-            return gms.IsOpen("Time Trial", "The Hallway", ttCurrentActiveDiff)
-        end)
-        if ok and win and win.OpensAt then
-            ttLastJoinedWindowId = tostring(win.OpensAt) .. "_" .. ttCurrentActiveDiff
-        end
-    end
+    -- ผู้เล่นอยู่ใน Time Trial แล้ว
+    ttWasInsideLast = true
+
     -- Exit เมื่อถึง Target Exit Stage (slider)
     if CFG.TTCustomExitStage then
         local currentStage = getCurrentGamemodeStage()
@@ -9627,6 +9683,16 @@ Tabs.Farm = function(win)
         Callback = function(v)
             CFG.AutoGoNewArea = v
             currentLockedTargetUID = nil
+            currentCoveredTargetUIDs = {}
+            if v then
+                local highest = getHighestUnlockedMap()
+                if highest and highest ~= "Lobby" and highest ~= getCurrentMap() then
+                    TIMERS.lastNewAreaTeleport = os.clock()
+                    pcall(function()
+                        Library.Remote:Fire("TeleportSystem", "To", highest)
+                    end)
+                end
+            end
         end
     })
     TabFarm:Toggle({
@@ -9758,7 +9824,22 @@ Tabs.Events = function(win)
         Title = "Leave Time Trial",
         Desc = "Exits the current trial.",
         Callback = function()
-            Library.Remote:Fire("GamemodeSystem", "Quit", true)
+            currentLockedTargetUID = nil
+            currentCoveredTargetUIDs = {}
+            if getgenv then
+                getgenv()._CurrentLockedUID = nil
+                getgenv()._CurrentCoveredUIDs = {}
+            end
+            local gms = _GamemodeSvc
+            if gms and gms.GetWindow then
+                for _, d in ipairs({"Easy", "Medium", "Hard"}) do
+                    local _, win = gms.IsOpen("Time Trial", "The Hallway", d)
+                    if win and win.OpensAt then
+                        ttLastJoinedWindowId = tostring(win.OpensAt) .. "_" .. d
+                    end
+                end
+            end
+            executeGamemodeQuit()
         end
     })
 
