@@ -6,7 +6,7 @@
 repeat task.wait(0.5) until game:IsLoaded()
 
 -- 🔗 ใส่ลิงก์ Raw ของมึงตรงนี้ (เช่น GitHub Raw หรือ Pastebin Raw)
-local RAW_URL = "ใส่_RAW_URL_ของมึงที่นี่"
+local RAW_URL = "https://raw.githubusercontent.com/wtetion/loadersin/refs/heads/main/Zero.lua"
 
 getgenv().AZ_RAW_URL = RAW_URL
 pcall(function()
