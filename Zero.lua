@@ -2210,10 +2210,71 @@ local function countAliveEnemies()
     return count
 end
 
--- ตรวจหาและนับสิ่งกีดขวาง Rubble [BREAK IT] (เฉพาะเมื่อมอนสเตอร์จริงในห้องตายหมด 100% แล้วเท่านั้น!)
+-- ตรวจสอบว่ายังมีคลื่นเวฟดำเนินอยู่ หรือกำลังรอคลื่นมอนสเตอร์เกิดใหม่หรือไม่ (ป้องกันการเล็งกำแพงก่อนมอนสเตอร์ 100%)
+local function isWaveOngoingOrMonstersPending()
+    -- 1. มีมอนสเตอร์ที่มีชีวิตอยู่ใน workspace.enemies
+    if countAliveEnemies() > 0 then
+        return true
+    end
+
+    -- 2. ตรวจสอบ UI การแข่งขัน (RunSide, RoundHUD, MobileHUD)
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    if pg then
+        -- เช็คข้อความ Next Wave Starting.. ทั่วทุกหน้าจอ
+        for _, g in ipairs(pg:GetChildren()) do
+            if g:IsA("ScreenGui") and g.Enabled then
+                for _, d in ipairs(g:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
+                        local tLow = d.Text:lower()
+                        if tLow:find("next wave starting") or tLow:find("wave starting") then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+
+        -- เช็คจากหน้าต่าง RunSide หรือ RoundHUD
+        local rs = pg:FindFirstChild("RunSide") or pg:FindFirstChild("RoundHUD")
+        if rs then
+            for _, item in ipairs(rs:GetDescendants()) do
+                if item:IsA("TextLabel") then
+                    local txt = item.Text
+                    -- ถ้าศัตรูที่ยังมีชีวิตอยู่ > 0 ใน UI
+                    if txt:lower():find("enemies alive") or txt:find("ศัตรูที่ยังมีชีวิตอยู่") then
+                        local parent = item.Parent
+                        if parent then
+                            local valLabel = parent:FindFirstChild("Value")
+                            if valLabel and valLabel:IsA("TextLabel") then
+                                local aliveNum = tonumber(valLabel.Text:match("%d+")) or 0
+                                if aliveNum > 0 then
+                                    return true
+                                end
+                            end
+                        end
+                    end
+
+                    -- ถ้ายังอยู่ในเวฟแรกๆ ของห้อง (เช่น Wave 1/2) ห้ามตีกำแพงเด็ดขาด
+                    local cw, mw = txt:match("[Ww]ave%s*(%d+)%s*/%s*(%d+)")
+                    if cw and mw then
+                        local curW = tonumber(cw) or 1
+                        local maxW = tonumber(mw) or 1
+                        if curW < maxW then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+-- ตรวจหาและนับสิ่งกีดขวาง Rubble [BREAK IT] (เฉพาะเมื่อมอนสเตอร์และเวฟทั้งหมดในห้องตายหมด 100% แล้วเท่านั้น!)
 local function findActiveRubbleTarget()
-    -- ★ ถ้ายังมีมอนสเตอร์จริงอยู่ในด่าน ห้ามเล็งกำแพง/Rubble เด็ดขาด! เล็งมอนสเตอร์เป็นอันดับแรก 100% ★
-    if countAliveEnemies and countAliveEnemies() > 0 then
+    -- ★ ถ้ายังมีมอนสเตอร์จริงอยู่ในด่าน หรือเวฟยังไม่จบ 100% ห้ามเล็งกำแพง/Rubble เด็ดขาด! ★
+    if isWaveOngoingOrMonstersPending() then
         return nil
     end
 
@@ -2828,6 +2889,13 @@ local function executeCombatCycle()
     -- ค้นหามอนสเตอร์
     local target = findNearestEnemy()
     if not target then
+        -- ★ ถ้ายังมีคลื่นมอนสเตอร์กำลังมา หรือกำลังรอเกิดใหม่ (Next Wave Starting) ให้อยู่นิ่งๆ รอมอน ห้ามวิ่งชนกำแพงเด็ดขาด! ★
+        if isWaveOngoingOrMonstersPending() then
+            setTask("⏳ กำลังรอคลื่นมอนสเตอร์ถัดไปเกิด (Next Wave Starting)...")
+            cleanupFlight()
+            return
+        end
+
         -- ตรวจสอบว่ามีเหรียญ Coin (Cash) ตกค้างในด่านหรือไม่ เก็บให้เกลี้ยงก่อนเข้า Area ถัดไป!
         local coinDrop = findNearestDrop("cash")
         if coinDrop then
@@ -2851,7 +2919,7 @@ local function executeCombatCycle()
             return
         end
 
-        -- ถ้าห้องนี้มอนสเตอร์เคยเกิดและตายหมดแล้ว ให้ขยับไปยัง Area ถัดไป
+        -- ถ้าห้องนี้มอนสเตอร์เคยเกิดและตายหมดแล้วจริงๆ ให้ขยับไปยัง Area ถัดไป
         if areaSpawnedEnemies[currentMatchArea] then
             areaSpawnedEnemies[currentMatchArea] = nil
             currentMatchArea = currentMatchArea + 1
