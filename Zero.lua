@@ -13,7 +13,7 @@ getgenv().AZ_Config = getgenv().AZ_Config or {
     AutoSubSummon   = true, -- สุ่มหาตัวละครเฉพาะใน Sub Summon Slot 1 (เช่น "Dragon Eclipse", "Flame Director") หรือใส่ true เพื่อหาตัวระดับ Mythic-Lyth ทั่วไป
     AutoAwakening   = true,             -- เปิดระบบฟาร์มของและ Awakening (Evolve) ตัวละครหลักอัตโนมัติ
     AutoDelivery50  = true,             -- ทำ Delivery Quests 50/50 เควสต์ก่อนอันดับแรก
-    EnglishUI       = true,             -- ภาษาของ UI (true = English, false = ภาษาไทย)
+    EnglishUI       = true             -- ภาษาของ UI (true = English, false = ภาษาไทย)
 }
 
 if getgenv().AZ_Config.AutoSubSummon == nil then
