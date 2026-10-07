@@ -2210,75 +2210,14 @@ local function countAliveEnemies()
     return count
 end
 
--- ตรวจสอบว่ายังมีคลื่นเวฟดำเนินอยู่ หรือกำลังรอคลื่นมอนสเตอร์เกิดใหม่หรือไม่ (ป้องกันการเล็งกำแพงก่อนมอนสเตอร์ 100%)
-local function isWaveOngoingOrMonstersPending()
-    -- 1. มีมอนสเตอร์ที่มีชีวิตอยู่ใน workspace.enemies
-    if countAliveEnemies() > 0 then
-        return true
-    end
-
-    -- 2. ตรวจสอบ UI การแข่งขัน (RunSide, RoundHUD, MobileHUD)
-    local pg = lp and lp:FindFirstChild("PlayerGui")
-    if pg then
-        -- เช็คข้อความ Next Wave Starting.. ทั่วทุกหน้าจอ
-        for _, g in ipairs(pg:GetChildren()) do
-            if g:IsA("ScreenGui") and g.Enabled then
-                for _, d in ipairs(g:GetDescendants()) do
-                    if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
-                        local tLow = d.Text:lower()
-                        if tLow:find("next wave starting") or tLow:find("wave starting") then
-                            return true
-                        end
-                    end
-                end
-            end
-        end
-
-        -- เช็คจากหน้าต่าง RunSide หรือ RoundHUD
-        local rs = pg:FindFirstChild("RunSide") or pg:FindFirstChild("RoundHUD")
-        if rs then
-            for _, item in ipairs(rs:GetDescendants()) do
-                if item:IsA("TextLabel") then
-                    local txt = item.Text
-                    -- ถ้าศัตรูที่ยังมีชีวิตอยู่ > 0 ใน UI
-                    if txt:lower():find("enemies alive") or txt:find("ศัตรูที่ยังมีชีวิตอยู่") then
-                        local parent = item.Parent
-                        if parent then
-                            local valLabel = parent:FindFirstChild("Value")
-                            if valLabel and valLabel:IsA("TextLabel") then
-                                local aliveNum = tonumber(valLabel.Text:match("%d+")) or 0
-                                if aliveNum > 0 then
-                                    return true
-                                end
-                            end
-                        end
-                    end
-
-                    -- ถ้ายังอยู่ในเวฟแรกๆ ของห้อง (เช่น Wave 1/2) ห้ามตีกำแพงเด็ดขาด
-                    local cw, mw = txt:match("[Ww]ave%s*(%d+)%s*/%s*(%d+)")
-                    if cw and mw then
-                        local curW = tonumber(cw) or 1
-                        local maxW = tonumber(mw) or 1
-                        if curW < maxW then
-                            return true
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return false
-end
-
--- ตรวจหาและนับสิ่งกีดขวาง Rubble [BREAK IT] (เฉพาะเมื่อมอนสเตอร์และเวฟทั้งหมดในห้องตายหมด 100% แล้วเท่านั้น!)
+-- ตรวจหาและนับสิ่งกีดขวาง Rubble [BREAK IT] (เมื่อไม่มีมอนสเตอร์จริงในด่านแล้ว)
 local function findActiveRubbleTarget()
-    -- ★ ถ้ายังมีมอนสเตอร์จริงอยู่ในด่าน หรือเวฟยังไม่จบ 100% ห้ามเล็งกำแพง/Rubble เด็ดขาด! ★
-    if isWaveOngoingOrMonstersPending() then
+    -- มีมอนสเตอร์จริงในด่าน ให้ตีมอนสเตอร์ก่อนเสมอ
+    if countAliveEnemies and countAliveEnemies() > 0 then
         return nil
     end
 
-    -- 1. ตรวจสอบจาก PlayerGui.RubbleBar (เกมเปิดแถบเลือดกำแพงให้ตีหลังจากเคลียร์มอนสเตอร์หมดแล้ว)
+    -- 1. ตรวจสอบจาก PlayerGui.RubbleBar (เกมเปิดแถบเลือดกำแพงให้ตี)
     local rb = lp and lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("RubbleBar")
     if rb and rb.Enabled then
         local holder = rb:FindFirstChild("Holder")
@@ -2778,6 +2717,13 @@ local function executeCombatCycle()
         return
     end
 
+    -- ★ รอให้แมพและ World โหลดสมบูรณ์ก่อนเริ่มต่อสู้ ★
+    if not workspace:FindFirstChild("World") or (tick() - matchStartTime < 3.0) then
+        setTask("⏳ กำลังรอแมพโหลดสมบูรณ์...")
+        cleanupFlight()
+        return
+    end
+
     -- ★ โหวตความยาก NIGHTMARE (4) และกด Ready อัตโนมัติทุกโหมด (Story, Endless, Raid) ★
     autoVoteNightmareAndReady()
 
@@ -2889,13 +2835,6 @@ local function executeCombatCycle()
     -- ค้นหามอนสเตอร์
     local target = findNearestEnemy()
     if not target then
-        -- ★ ถ้ายังมีคลื่นมอนสเตอร์กำลังมา หรือกำลังรอเกิดใหม่ (Next Wave Starting) ให้อยู่นิ่งๆ รอมอน ห้ามวิ่งชนกำแพงเด็ดขาด! ★
-        if isWaveOngoingOrMonstersPending() then
-            setTask("⏳ กำลังรอคลื่นมอนสเตอร์ถัดไปเกิด (Next Wave Starting)...")
-            cleanupFlight()
-            return
-        end
-
         -- ตรวจสอบว่ามีเหรียญ Coin (Cash) ตกค้างในด่านหรือไม่ เก็บให้เกลี้ยงก่อนเข้า Area ถัดไป!
         local coinDrop = findNearestDrop("cash")
         if coinDrop then
@@ -2986,14 +2925,26 @@ local function executeCombatCycle()
     combatBodyGyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
     combatBodyGyro.CFrame = orbitCf
 
-    -- ให้ BodyPosition นำทางและลอยตัวละครอย่างนุ่มนวลตามฟิสิกส์ ไม่ฝืน CFrame ทะลุกำแพงเพื่อป้องกันเซิร์ฟเวอร์ดึงกลับ (Anti-Rubberband)
-    local distToOrbit = (hrp.Position - desiredOrbitPos).Magnitude
-    if distToOrbit > 65.0 then
-        -- ห่างเกิน 65 เมตร (เช่น ตกแมพ หรือเพิ่งเกิด) ให้ปรับตำแหน่งเข้าหาระยะใกล้
-        local safePos = mobPos + Vector3.new(0, 4.0, 0)
-        hrp.CFrame = CFrame.lookAt(safePos, aimTargetPos)
-        if hrp.AssemblyLinearVelocity then
-            hrp.AssemblyLinearVelocity = Vector3.zero
+    -- เมื่อเป้าหมายเป็น Rubble / กำแพง: วาร์ปไปยืนประชิดหน้ากำแพงทันทีเพื่อให้ M1 และสกิลโดน 100%
+    if target.isRubble then
+        local targetLook = (target.root and target.root.CFrame.LookVector) or Vector3.new(0, 0, 1)
+        local rubbleFrontPos = mobPos + (targetLook * 5) + Vector3.new(0, 1.2, 0)
+        if (hrp.Position - rubbleFrontPos).Magnitude > 5 then
+            hrp.CFrame = CFrame.lookAt(rubbleFrontPos, mobPos)
+            if hrp.AssemblyLinearVelocity then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end
+        end
+    else
+        -- ให้ BodyPosition นำทางและลอยตัวละครอย่างนุ่มนวลตามฟิสิกส์ ไม่ฝืน CFrame ทะลุกำแพงเพื่อป้องกันเซิร์ฟเวอร์ดึงกลับ (Anti-Rubberband)
+        local distToOrbit = (hrp.Position - desiredOrbitPos).Magnitude
+        if distToOrbit > 65.0 then
+            -- ห่างเกิน 65 เมตร (เช่น ตกแมพ หรือเพิ่งเกิด) ให้ปรับตำแหน่งเข้าหาระยะใกล้
+            local safePos = mobPos + Vector3.new(0, 4.0, 0)
+            hrp.CFrame = CFrame.lookAt(safePos, aimTargetPos)
+            if hrp.AssemblyLinearVelocity then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end
         end
     end
 
