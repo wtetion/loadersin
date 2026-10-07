@@ -2402,6 +2402,9 @@ local lastElevatorPromptTick = 0
 
 local currentMatchArea = 1
 local areaSpawnedEnemies = {}
+local wasTargetingRubble = false
+local lastBorderWaitSeen = {}
+local lastAreaWaitSeen = {}
 
 local function getMatchAreasFolder()
     local w = workspace:FindFirstChild("World")
@@ -2633,7 +2636,7 @@ local function handleInMatchAreaProgression(hrp)
                 local blocker = highestBrokenBorder:FindFirstChild("Blocker")
                 local targetPart = blocker or highestBrokenBorder:FindFirstChildWhichIsA("BasePart", true)
                 if targetPart then
-                    local forwardPos = targetPart.Position + (targetPart.CFrame.LookVector * 28)
+                    local forwardPos = targetPart.Position + (targetPart.CFrame.LookVector * 35)
                     forwardPos = Vector3.new(forwardPos.X, targetPart.Position.Y + 1.2, forwardPos.Z)
                     setTask(string.format("🚶 ข้ามผ่าน Border %d เข้าสู่โซนถัดไป...", highestBorderNum))
                     cleanupFlight()
@@ -2642,6 +2645,13 @@ local function handleInMatchAreaProgression(hrp)
                         if hrp.AssemblyLinearVelocity then
                             hrp.AssemblyLinearVelocity = Vector3.zero
                         end
+                    end
+                    -- ★ ยืนตรงกลางโซนใหม่รอจนมอนสเตอร์เกิด (2 วินาที) ตามคำขอ ★
+                    if not lastBorderWaitSeen[highestBorderNum] then
+                        lastBorderWaitSeen[highestBorderNum] = true
+                        cleanupFlight()
+                        setTask(string.format("⏳ ยืนตรงกลางโซน %d รอมอนสเตอร์เกิด (2 วิ)...", highestBorderNum + 1))
+                        task.wait(2.0)
                     end
                     return
                 end
@@ -2692,6 +2702,14 @@ local function handleInMatchAreaProgression(hrp)
             firetouchinterest(hrp, areaPart, 0)
             task.wait(0.02)
             firetouchinterest(hrp, areaPart, 1)
+        end
+
+        -- ★ ยืนตรงกลางห้องรอจนมอนสเตอร์เกิด (2 วินาที) ตามคำขอ ★
+        if not lastAreaWaitSeen[currentMatchArea] then
+            lastAreaWaitSeen[currentMatchArea] = true
+            cleanupFlight()
+            setTask(string.format("⏳ ยืนตรงกลางห้อง Area %d รอมอนสเตอร์เกิด (2 วิ)...", currentMatchArea))
+            task.wait(2.0)
         end
     else
         cleanupFlight()
@@ -2835,6 +2853,16 @@ local function executeCombatCycle()
     -- ค้นหามอนสเตอร์
     local target = findNearestEnemy()
     if not target then
+        -- ★ ถ้าเพิ่งทุบกำแพง Rubble แตกหมาดๆ: เดินข้ามเข้าสู่โซนใหม่ทันที และยืนนิ่งๆ ตรงกลางรอมอนสเตอร์เกิด 2 วินาที! ★
+        if wasTargetingRubble then
+            wasTargetingRubble = false
+            cleanupFlight()
+            handleInMatchAreaProgression(hrp)
+            setTask("⏳ ทุบกำแพงสำเร็จ! ยืนตรงกลางโซนใหม่ รอมอนสเตอร์เกิด (2 วิ)...")
+            task.wait(2.0)
+            return
+        end
+
         -- ตรวจสอบว่ามีเหรียญ Coin (Cash) ตกค้างในด่านหรือไม่ เก็บให้เกลี้ยงก่อนเข้า Area ถัดไป!
         local coinDrop = findNearestDrop("cash")
         if coinDrop then
@@ -2867,6 +2895,13 @@ local function executeCombatCycle()
         -- ★ เดิน/วาร์ปไปยืนกลางห้องของ Area ปัจจุบัน เพื่อให้มอนสเตอร์ออกมาทันที ★
         handleInMatchAreaProgression(hrp)
         return
+    end
+
+    -- บันทึกสถานะว่ากำลังตี Rubble หรือไม่ เพื่อเตรียมสลับเข้าโซนใหม่
+    if target.isRubble then
+        wasTargetingRubble = true
+    else
+        wasTargetingRubble = false
     end
 
     -- เมื่อพบมอนสเตอร์แล้ว บันทึกว่าห้องนี้มีมอนสเตอร์เกิดแล้ว
@@ -3139,6 +3174,9 @@ task.spawn(function()
             cleanupFlight()
             currentMatchArea = 1
             table.clear(areaSpawnedEnemies)
+            table.clear(lastBorderWaitSeen)
+            table.clear(lastAreaWaitSeen)
+            wasTargetingRubble = false
             matchStartTime = tick()
             matchEndSeenTime = 0
             pcall(autoClaimLevelMilestones)
