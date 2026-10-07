@@ -10,7 +10,7 @@
 getgenv().AZ_Config = getgenv().AZ_Config or {
     AutoRerollTrait = false,            -- สุ่ม Trait หรือไม่ (true = เปิดสุ่ม Trait 0.04%/0.01% อัตโนมัติ / false = ปิด ให้ลูกค้าสุ่มเอง)
     AutoSummon      = true,             -- เปิดระบบสุ่มตัวละคร Sub Summon (Slot 1) & สุ่ม Slot 2 หาตัวระดับ LYTH
-    AutoSubSummon   = "Dragon Eclipse", -- สุ่มหาตัวละครเฉพาะใน Sub Summon Slot 1 (เช่น "Dragon Eclipse", "Flame Director") หรือใส่ true เพื่อหาตัวระดับ Mythic-Lyth ทั่วไป
+    AutoSubSummon   = true, -- สุ่มหาตัวละครเฉพาะใน Sub Summon Slot 1 (เช่น "Dragon Eclipse", "Flame Director") หรือใส่ true เพื่อหาตัวระดับ Mythic-Lyth ทั่วไป
     AutoAwakening   = true,             -- เปิดระบบฟาร์มของและ Awakening (Evolve) ตัวละครหลักอัตโนมัติ
     AutoDelivery50  = true,             -- ทำ Delivery Quests 50/50 เควสต์ก่อนอันดับแรก
     EnglishUI       = true,             -- ภาษาของ UI (true = English, false = ภาษาไทย)
