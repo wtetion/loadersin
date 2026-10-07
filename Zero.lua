@@ -8,11 +8,20 @@
 -- USER CONFIGURATION (ปรับแต่งการทำงานของระบบ)
 -- ══════════════════════════════════════════════════
 getgenv().AZ_Config = getgenv().AZ_Config or {
-    AutoRerollTrait = false,       -- สุ่ม Trait หรือไม่ (true = เปิดสุ่ม Trait 0.04%/0.01% อัตโนมัติ / false = ปิด ให้ลูกค้าสุ่มเอง)
-    AutoSummon      = true,        -- เปิดระบบสุ่มตัวละคร Sub Summon (Slot 1) & สุ่ม Slot 2 หาตัวระดับ LYTH
-    AutoAwakening   = true,        -- เปิดระบบฟาร์มของและ Awakening (Evolve) ตัวละครหลักอัตโนมัติ
-    AutoDelivery50  = true         -- ทำ Delivery Quests 50/50 เควสต์ก่อนอันดับแรก
+    AutoRerollTrait = false,            -- สุ่ม Trait หรือไม่ (true = เปิดสุ่ม Trait 0.04%/0.01% อัตโนมัติ / false = ปิด ให้ลูกค้าสุ่มเอง)
+    AutoSummon      = true,             -- เปิดระบบสุ่มตัวละคร Sub Summon (Slot 1) & สุ่ม Slot 2 หาตัวระดับ LYTH
+    AutoSubSummon   = "Dragon Eclipse", -- สุ่มหาตัวละครเฉพาะใน Sub Summon Slot 1 (เช่น "Dragon Eclipse", "Flame Director") หรือใส่ true เพื่อหาตัวระดับ Mythic-Lyth ทั่วไป
+    AutoAwakening   = true,             -- เปิดระบบฟาร์มของและ Awakening (Evolve) ตัวละครหลักอัตโนมัติ
+    AutoDelivery50  = true,             -- ทำ Delivery Quests 50/50 เควสต์ก่อนอันดับแรก
+    EnglishUI       = true,             -- ภาษาของ UI (true = English, false = ภาษาไทย)
 }
+
+if getgenv().AZ_Config.AutoSubSummon == nil then
+    getgenv().AZ_Config.AutoSubSummon = getgenv().AZ_Config.TargetSubSummon or "Dragon Eclipse"
+end
+if getgenv().AZ_Config.EnglishUI == nil then
+    getgenv().AZ_Config.EnglishUI = getgenv().AZ_Config.English or false
+end
 
 
 -- ══════════════════════════════════════════════════
@@ -909,6 +918,48 @@ local function getRollCurrencyAvailable()
     return nil, 0
 end
 
+local function getTargetSubSummonName()
+    local cfg = getgenv().AZ_Config
+    if not cfg then return nil end
+    if type(cfg.AutoSubSummon) == "string" and cfg.AutoSubSummon ~= "" then
+        return cfg.AutoSubSummon
+    end
+    if type(cfg.TargetSubSummon) == "string" and cfg.TargetSubSummon ~= "" then
+        return cfg.TargetSubSummon
+    end
+    if type(cfg.AutoSummon) == "string" and cfg.AutoSummon ~= "" then
+        return cfg.AutoSummon
+    end
+    return nil
+end
+
+local function isMatchingCharacterName(curChar, targetName)
+    if not curChar or not targetName then return false end
+    local c1 = tostring(curChar):lower():gsub("[%s_%-]", "")
+    local c2 = tostring(targetName):lower():gsub("[%s_%-]", "")
+    if c1 == c2 or c1:find(c2, 1, true) or c2:find(c1, 1, true) then
+        return true
+    end
+    if charsConstant then
+        local cDef = charsConstant[curChar] or charsConstant[tostring(curChar):lower()]
+        if cDef and cDef.displayName then
+            local dName = tostring(cDef.displayName):lower():gsub("[%s_%-]", "")
+            if dName == c2 or dName:find(c2, 1, true) or c2:find(dName, 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function isSlot1Satisfied(slot1Char, slot1Rarity)
+    local targetSub = getTargetSubSummonName()
+    if targetSub then
+        return isMatchingCharacterName(slot1Char, targetSub)
+    end
+    return isMythicOrHigher(slot1Rarity)
+end
+
 local function autoSummonSlotsManager()
     if isMatch or not lobbyPkts or not lobbyPkts.rollCharacter then return false end
     if not (getgenv().AZ_Config and getgenv().AZ_Config.AutoSummon) then return false end
@@ -916,22 +967,25 @@ local function autoSummonSlotsManager()
     local slot1Char, slot1Rarity, slot1Unlocked = getSlotCharacterInfo(1)
     local slot2Char, slot2Rarity, slot2Unlocked = getSlotCharacterInfo(2)
 
-    -- 1. ตรวจสอบ Slot 1 (Sub Summon): ต้องได้อย่างน้อย Mythical - Lyth (Mythic, Arcane, Zenless)
-    if not isMythicOrHigher(slot1Rarity) then
+    -- 1. ตรวจสอบ Slot 1 (Sub Summon): สุ่มหาตัวที่กำหนด (เช่น "Dragon Eclipse") หรือระดับ Mythical - Lyth
+    local targetSub = getTargetSubSummonName()
+    if not isSlot1Satisfied(slot1Char, slot1Rarity) then
         while true do
             if isMatch then break end
             local s1Char, s1Rarity = getSlotCharacterInfo(1)
-            if isMythicOrHigher(s1Rarity) then
-                setTask(string.format("✨ Slot 1 ได้ระดับ [%s: %s] สำเร็จ — เก็บไว้ทันที!", s1Rarity, s1Char:upper()))
+            if isSlot1Satisfied(s1Char, s1Rarity) then
+                setTask(string.format("✨ Slot 1 สุ่มได้ [%s] สำเร็จ — เก็บไว้ทันที!", (targetSub or s1Char):upper()))
                 task.wait(0.4)
                 break
             end
             local curr, balance = getRollCurrencyAvailable()
             if not curr then
-                setTask("⚠️ โรลและเงินสำหรับ Slot 1 หมดแล้ว — ต้องไปฟาร์มด่าน 1 [NIGHTMARE] หาเงิน...")
+                local req = targetSub and string.format("สุ่มหา %s", targetSub:upper()) or "Slot 1"
+                setTask(string.format("⚠️ โรลและเงินสำหรับ %s หมดแล้ว — ต้องไปฟาร์มด่าน 1 [NIGHTMARE] หาเงิน...", req))
                 return false
             end
-            setTask(string.format("🎰 สุ่ม Slot 1 ให้ถึงระดับ Mythic-Lyth (%s เหลือ %d)...", curr:upper(), balance))
+            local goalDesc = targetSub and string.format("หาตัว [%s]", targetSub:upper()) or "ให้ถึงระดับ Mythic-Lyth"
+            setTask(string.format("🎰 สุ่ม Slot 1 %s (%s เหลือ %d)...", goalDesc, curr:upper(), balance))
             pcall(function()
                 lobbyPkts.rollCharacter:fire({
                     spinType = "Normal",
@@ -1056,12 +1110,15 @@ local function getStrategicStageInfo()
         local slot2Char, slot2Rarity, slot2Unlocked = getSlotCharacterInfo(2)
         local curr, balance = getRollCurrencyAvailable()
 
-        -- 2.1 ช่อง 1 (Sub Summon): ต้องได้อย่างน้อย Mythical - Lyth
-        if not isMythicOrHigher(slot1Rarity) then
+        -- 2.1 ช่อง 1 (Sub Summon): ต้องได้ตัวที่กำหนด (เช่น "Dragon Eclipse") หรืออย่างน้อย Mythical - Lyth
+        if not isSlot1Satisfied(slot1Char, slot1Rarity) then
+            local targetSub = getTargetSubSummonName()
+            local goalDesc = targetSub and string.format("หาตัว [%s]", targetSub:upper()) or "ให้ถึงระดับ Mythic-Lyth"
             if curr then
-                return "Summon", "Lobby", 0, 4, string.format("🎰 [STEP 2] สุ่ม Slot 1 ใน Lobby ให้ถึงระดับ Mythic-Lyth (%s เหลือ %d)...", curr:upper(), balance)
+                return "Summon", "Lobby", 0, 4, string.format("🎰 [STEP 2] สุ่ม Slot 1 ใน Lobby %s (%s เหลือ %d)...", goalDesc, curr:upper(), balance)
             else
-                return "Story", "Hxh", 1, 4, "💰 [STEP 2] โรล/เงินหมด — ฟาร์มด่าน 1 [NIGHTMARE] หาเงินสุ่ม Slot 1..."
+                local req = targetSub and string.format("สุ่มหา %s", targetSub:upper()) or "สุ่ม Slot 1"
+                return "Story", "Hxh", 1, 4, string.format("💰 [STEP 2] โรล/เงินหมด — ฟาร์มด่าน 1 [NIGHTMARE] หาเงิน%s...", req)
             end
         end
 
@@ -1483,7 +1540,18 @@ StatusContainer.BackgroundTransparency = 1; StatusContainer.Parent = HUD
 local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 4); listLayout.SortOrder = Enum.SortOrder.LayoutOrder; listLayout.Parent = StatusContainer
 
-local function createRow(icon, title, color, order)
+local rowTitles = {
+    money = { th = "เงิน", en = "Money" },
+    gems  = { th = "เพชร", en = "Gems" },
+    char  = { th = "ตัวละคร", en = "Character" },
+    level = { th = "เลเวล", en = "Level" },
+    acc   = { th = "เครื่องประดับ", en = "Accessory" },
+    stage = { th = "ด่าน / โหมด", en = "Stage / Mode" },
+    task  = { th = "สถานะ", en = "Status" },
+}
+
+local rowTitleLabels = {}
+local function createRow(icon, key, color, order)
     local row = Instance.new("Frame")
     row.BackgroundColor3 = Color3.fromRGB(16, 12, 30); row.BorderSizePixel = 0; row.Size = UDim2.new(1, 0, 0, 28)
     row.LayoutOrder = order; row.Parent = StatusContainer
@@ -1497,9 +1565,13 @@ local function createRow(icon, title, color, order)
     iconLbl.BackgroundTransparency = 1; iconLbl.Size = UDim2.new(0, 24, 1, 0); iconLbl.Position = UDim2.new(0, 4, 0, 0); iconLbl.Parent = row
 
     local titleLbl = Instance.new("TextLabel")
-    titleLbl.Text = title; titleLbl.Font = Enum.Font.GothamMedium; titleLbl.TextSize = 11
+    local isEng = getgenv().AZ_Config and (getgenv().AZ_Config.EnglishUI or getgenv().AZ_Config.English)
+    local tInfo = rowTitles[key] or { th = key, en = key }
+    titleLbl.Text = isEng and tInfo.en or tInfo.th
+    titleLbl.Font = Enum.Font.GothamMedium; titleLbl.TextSize = 11
     titleLbl.TextColor3 = Color3.fromRGB(175, 165, 215); titleLbl.BackgroundTransparency = 1
     titleLbl.Size = UDim2.new(0.35, 0, 1, 0); titleLbl.Position = UDim2.new(0, 28, 0, 0); titleLbl.TextXAlignment = Enum.TextXAlignment.Left; titleLbl.Parent = row
+    rowTitleLabels[key] = titleLbl
 
     local valLbl = Instance.new("TextLabel")
     valLbl.Text = "..."; valLbl.Font = Enum.Font.GothamBold; valLbl.TextSize = 11
@@ -1508,19 +1580,33 @@ local function createRow(icon, title, color, order)
     return valLbl
 end
 
-local moneyVal = createRow("💰", "เงิน", Color3.fromRGB(255, 215, 80), 1)
-local gemsVal  = createRow("💎", "เพชร", Color3.fromRGB(90, 210, 255), 2)
-local charVal  = createRow("🧬", "ตัวละคร", Color3.fromRGB(255, 120, 200), 3)
-local levelVal = createRow("⭐", "Level", Color3.fromRGB(255, 175, 60), 4)
-local accVal   = createRow("💍", "เครื่องประดับ", Color3.fromRGB(255, 90, 130), 5)
-local stageVal = createRow("🗺️", "ด่าน / โหมด", Color3.fromRGB(110, 245, 160), 6)
-local taskVal  = createRow("⚙️", "สถานะ", Color3.fromRGB(255, 255, 255), 7)
+local moneyVal = createRow("💰", "money", Color3.fromRGB(255, 215, 80), 1)
+local gemsVal  = createRow("💎", "gems",  Color3.fromRGB(90, 210, 255), 2)
+local charVal  = createRow("🧬", "char",  Color3.fromRGB(255, 120, 200), 3)
+local levelVal = createRow("⭐", "level", Color3.fromRGB(255, 175, 60), 4)
+local accVal   = createRow("💍", "acc",   Color3.fromRGB(255, 90, 130), 5)
+local stageVal = createRow("🗺️", "stage", Color3.fromRGB(110, 245, 160), 6)
+local taskVal  = createRow("⚙️", "task",  Color3.fromRGB(255, 255, 255), 7)
 
 local lastTick = 0
 table.insert(_G.AZ_Connections, RunService.Heartbeat:Connect(function()
     if tick() - lastTick > 0.35 then
         lastTick = tick()
         pcall(function()
+            local isEng = getgenv().AZ_Config and (getgenv().AZ_Config.EnglishUI or getgenv().AZ_Config.English)
+            for k, lbl in pairs(rowTitleLabels) do
+                local tInfo = rowTitles[k]
+                if tInfo then
+                    local targetT = isEng and tInfo.en or tInfo.th
+                    if lbl.Text ~= targetT then
+                        lbl.Text = targetT
+                    end
+                end
+            end
+            if SubTitleLabel then
+                SubTitleLabel.Text = isEng and "AUTONOMOUS PRO · CRAFT & RAID" or "ระบบฟาร์มอัตโนมัติ · คราฟต์ & เรด"
+            end
+
             local s = getAccState()
             local m = getCurrency("money")
             moneyVal.Text = type(m) == "number" and string.format("%d", m) or tostring(m)
@@ -1550,7 +1636,7 @@ table.insert(_G.AZ_Connections, RunService.Heartbeat:Connect(function()
                 local aInfo = accCfg and accCfg[curEqAcc]
                 accVal.Text = (aInfo and (aInfo.Name or aInfo.DisplayName)) or ("Acc #" .. curEqAcc)
             else
-                accVal.Text = "None"
+                accVal.Text = isEng and "None" or "ไม่มี"
             end
         end)
     end
@@ -2243,11 +2329,31 @@ local function getCurrentMatchArea()
                 for _, d in ipairs(g:GetDescendants()) do
                     if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
                         local txt = d.Text
+                        -- 1. ตรวจจับเลข Area ภาษาอังกฤษ
                         if not txt:lower():find("next boss") then
                             local aMatch = txt:match("[Aa]rea%s*(%d+)")
                             if aMatch then
                                 local aNum = tonumber(aMatch)
                                 if aNum then return aNum end
+                            end
+                        end
+                        -- 2. ตรวจจับเลข Area ภาษาไทย (เช่น "พื้นที่ 5/5", "เขต 5")
+                        if not txt:find("บอสถัดไป") then
+                            local thMatch = txt:match("พื้นที่%s*(%d+)") or txt:match("เขต%s*(%d+)")
+                            if thMatch then
+                                local aNum = tonumber(thMatch)
+                                if aNum then return aNum end
+                            end
+                        end
+                        -- 3. ตรวจจับเศษส่วน Area ใน RoundHUD (เช่น "5/5" ใน "ฝันร้าย · พื้นที่ 5/5 · เหลือ 14")
+                        if not txt:lower():find("wave") and not txt:find("เวฟ") then
+                            local curA, maxA = txt:match("(%d+)%s*/%s*(%d+)")
+                            if curA and maxA then
+                                local cNum = tonumber(curA)
+                                local mNum = tonumber(maxA)
+                                if cNum and mNum and mNum >= 3 and cNum <= mNum then
+                                    return cNum
+                                end
                             end
                         end
                     end
@@ -2263,11 +2369,14 @@ local function getAreaCenterPosition(areaNum)
     local areasFolder = getMatchAreasFolder()
     if areasFolder then
         local aPart = areasFolder:FindFirstChild(tostring(aNum))
+        if not aPart and aNum >= 5 then
+            aPart = areasFolder:FindFirstChild("5") or areasFolder:FindFirstChild("Boss")
+        end
         if not aPart and aNum == 1 then
             aPart = areasFolder:FindFirstChild("1") or areasFolder:FindFirstChildWhichIsA("BasePart")
         end
         if aPart and aPart:IsA("BasePart") then
-            return aPart.Position + Vector3.new(0, 1.2, 0)
+            return aPart.Position + Vector3.new(0, 1.2, 0), aPart
         end
     end
 
@@ -2278,12 +2387,13 @@ local function getAreaCenterPosition(areaNum)
         if border then
             local blocker = border:FindFirstChild("Blocker") or border:FindFirstChildWhichIsA("BasePart", true)
             if blocker then
-                local forwardPos = blocker.Position + (blocker.CFrame.LookVector * 35)
-                return Vector3.new(forwardPos.X, blocker.Position.Y + 1.2, forwardPos.Z)
+                local forwardDist = (aNum >= 5) and 60 or 35
+                local forwardPos = blocker.Position + (blocker.CFrame.LookVector * forwardDist)
+                return Vector3.new(forwardPos.X, blocker.Position.Y + 1.2, forwardPos.Z), blocker
             end
         end
     end
-    return nil
+    return nil, nil
 end
 
 -- ตรวจสอบสถานะและจำนวน Wave ในด่านปัจจุบัน (เช่น Wave 1/2, Wave 2/2)
@@ -2997,6 +3107,34 @@ local function executeCombatCycle()
     -- ดูดเหรียญรอบตัวระหว่างต่อสู้
     vacuumNearbyCoins(75)
 
+    -- ★ SPECIAL CHECK: AREA 5 / BOSS ROOM DIRECT WARP ★
+    -- ถ้าด่านปัจจุบันถึง Area 5/5 (หรือห้องบอส) ให้วาร์ปทะลุเข้าห้องบอสทันที ป้องกันการติดค้างอยู่ Area ก่อนหน้า!
+    local curAreaNum = getCurrentMatchArea()
+    currentMatchArea = curAreaNum
+    if curAreaNum >= 5 then
+        local area5Pos, area5Part = getAreaCenterPosition(5)
+        if area5Pos then
+            local distToArea5 = (hrp.Position - area5Pos).Magnitude
+            if distToArea5 > 25 then
+                cleanupFlight()
+                hrp.CFrame = CFrame.new(area5Pos)
+                if hrp.AssemblyLinearVelocity then
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                end
+                if area5Part and firetouchinterest then
+                    pcall(function()
+                        firetouchinterest(hrp, area5Part, 0)
+                        task.wait(0.02)
+                        firetouchinterest(hrp, area5Part, 1)
+                    end)
+                end
+                setTask("⚡ ตรวจพบ Area 5/5 (บอส) — วาร์ปเข้าห้องบอสทันที!")
+                task.wait(0.2)
+                return
+            end
+        end
+    end
+
     -- ค้นหามอนสเตอร์
     local target = findNearestEnemy()
     if not target then
@@ -3010,14 +3148,34 @@ local function executeCombatCycle()
             return
         end
 
-        -- ★ ตรวจสอบสถานะ Wave ในห้องปัจจุบัน (เช่น จบเวฟ 1/2) ★
         local curW, maxW = getCurrentWaveProgress()
+        local curArea = getCurrentMatchArea()
+        currentMatchArea = curArea
+        local centerPos, areaPart = getAreaCenterPosition(curArea)
+
+        -- ★ ถ้าตัวละครอยู่ห่างจากจุดเกิดมอนสเตอร์ของ Area ปัจจุบันเกิน 25 เมตร (เช่น ข้ามห้องมาแล้วแต่ยังไม่ถึงจุดทริกเกอร์มอนสเตอร์)
+        if centerPos and (hrp.Position - centerPos).Magnitude > 25 then
+            cleanupFlight()
+            hrp.CFrame = CFrame.new(centerPos)
+            if hrp.AssemblyLinearVelocity then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end
+            if areaPart and firetouchinterest then
+                pcall(function()
+                    firetouchinterest(hrp, areaPart, 0)
+                    task.wait(0.02)
+                    firetouchinterest(hrp, areaPart, 1)
+                end)
+            end
+            setTask(string.format("🏛️ วาร์ปเข้าสู่จุดกลางห้อง Area %d...", curArea))
+            task.wait(0.2)
+            return
+        end
+
+        -- ★ ตรวจสอบสถานะ Wave ในห้องปัจจุบัน (เช่น จบเวฟ 1/2) ★
         if curW < maxW then
             -- ★ พอจบเวฟ 1/2 ให้วาร์ปไปตรงกลางยืนเฉยๆ ไม่ต้องตีอะไรเลย จนกว่า target monster จะขึ้น ★
             cleanupFlight()
-            local curArea = getCurrentMatchArea()
-            currentMatchArea = curArea
-            local centerPos = getAreaCenterPosition(curArea)
             if centerPos then
                 if (hrp.Position - centerPos).Magnitude > 4 then
                     hrp.CFrame = CFrame.new(centerPos)
