@@ -2715,6 +2715,35 @@ local function handleInMatchAreaProgression(hrp)
         cleanupFlight()
         setTask("🔍 กำลังรอคลื่นมอนสเตอร์ในห้อง...")
     end
+-- ตรวจสอบสถานะและจำนวน Wave ในด่านปัจจุบัน (เช่น Wave 1/2)
+local function getCurrentWaveProgress()
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    if pg then
+        local rh = pg:FindFirstChild("RunSide") or pg:FindFirstChild("RoundHUD")
+        if rh then
+            for _, d in ipairs(rh:GetDescendants()) do
+                if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
+                    local cw, mw = d.Text:match("[Ww]ave%s*(%d+)%s*/%s*(%d+)")
+                    if cw and mw then
+                        return tonumber(cw) or 1, tonumber(mw) or 1
+                    end
+                    local cwTh, mwTh = d.Text:match("เวฟ%s*(%d+)%s*/%s*(%d+)")
+                    if cwTh and mwTh then
+                        return tonumber(cwTh) or 1, tonumber(mwTh) or 1
+                    end
+                end
+            end
+        end
+
+        local mh = pg:FindFirstChild("MobileHUD")
+        if mh and mh:FindFirstChild("SafeArea") and mh.SafeArea:FindFirstChild("WaveNotice") then
+            local msg = mh.SafeArea.WaveNotice:FindFirstChild("Message")
+            if msg and msg.Visible and msg.Text:lower():find("next wave starting") then
+                return 1, 2
+            end
+        end
+    end
+    return 1, 1
 end
 
 local function executeCombatCycle()
@@ -2859,6 +2888,20 @@ local function executeCombatCycle()
             cleanupFlight()
             handleInMatchAreaProgression(hrp)
             setTask("⏳ ทุบกำแพงสำเร็จ! ยืนตรงกลางโซนใหม่ รอมอนสเตอร์เกิด (2 วิ)...")
+            task.wait(2.0)
+            return
+        end
+
+        -- ★ ตรวจสอบสถานะ Wave ในห้องปัจจุบัน (เช่น จบเวฟ 1/2) ★
+        local curW, maxW = getCurrentWaveProgress()
+        if curW < maxW then
+            -- เพิ่งจบเวฟ 1/2: ยืนตรงกลางโซนปัจจุบัน รอมอนสเตอร์เวฟถัดไปเกิด 2 วินาที ห้ามขยับไปไหนเด็ดขาด!
+            cleanupFlight()
+            if hrp.Position.Y > 8 then
+                hrp.CFrame = CFrame.new(hrp.Position.X, 3.0, hrp.Position.Z)
+                if hrp.AssemblyLinearVelocity then hrp.AssemblyLinearVelocity = Vector3.zero end
+            end
+            setTask(string.format("⏳ จบเวฟ %d/%d — ยืนตรงกลางโซนรอมอนสเตอร์เกิด (2 วิ)...", curW, maxW))
             task.wait(2.0)
             return
         end
