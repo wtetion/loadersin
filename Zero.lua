@@ -2715,6 +2715,8 @@ local function handleInMatchAreaProgression(hrp)
         cleanupFlight()
         setTask("🔍 กำลังรอคลื่นมอนสเตอร์ในห้อง...")
     end
+end
+
 -- ตรวจสอบสถานะและจำนวน Wave ในด่านปัจจุบัน (เช่น Wave 1/2)
 local function getCurrentWaveProgress()
     local pg = lp and lp:FindFirstChild("PlayerGui")
