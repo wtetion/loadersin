@@ -27,9 +27,18 @@ if _G.AZ_Connections then
 end
 _G.AZ_Connections = {}
 
+local Players           = game:GetService("Players")
+local lp                = Players.LocalPlayer
+if not lp then
+    repeat
+        task.wait(0.1)
+        lp = Players.LocalPlayer
+    until lp
+end
+
 pcall(function()
     local cg = game:GetService("CoreGui")
-    local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+    local pg = lp and lp:FindFirstChild("PlayerGui")
     for _, parent in ipairs({ cg, pg }) do
         if parent then
             for _, c in ipairs(parent:GetChildren()) do
@@ -44,14 +53,12 @@ end)
 -- ══════════════════════════════════════════════════
 -- 1. SERVICES
 -- ══════════════════════════════════════════════════
-local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local TweenService      = game:GetService("TweenService")
 local TeleportService   = game:GetService("TeleportService")
 local UserInputService  = game:GetService("UserInputService")
 local VirtualUser       = game:GetService("VirtualUser")
 local RS                = game:GetService("ReplicatedStorage")
-local lp                = Players.LocalPlayer
 
 local isMatch = (RS:FindFirstChild("performM1") ~= nil) or (workspace:FindFirstChild("enemies") ~= nil)
 
@@ -1207,13 +1214,15 @@ local getHighestUnlockedStageInfo = getStrategicStageInfo
 -- ══════════════════════════════════════════════════
 -- 3. ANTI-CHEAT & ANTI-AFK ENGINE
 -- ══════════════════════════════════════════════════
-table.insert(_G.AZ_Connections, lp.Idled:Connect(function()
-    pcall(function()
-        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-        task.wait(0.5)
-        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-    end)
-end))
+if lp and lp.Idled then
+    table.insert(_G.AZ_Connections, lp.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            task.wait(0.5)
+            VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        end)
+    end))
+end
 
 local lastAntiAFK = 0
 local lastSkillTreeCombatTick = 0
@@ -2210,10 +2219,163 @@ local function countAliveEnemies()
     return count
 end
 
--- ตรวจหาและนับสิ่งกีดขวาง Rubble [BREAK IT] (เมื่อไม่มีมอนสเตอร์จริงในด่านแล้ว)
-local function findActiveRubbleTarget()
-    -- มีมอนสเตอร์จริงในด่าน ให้ตีมอนสเตอร์ก่อนเสมอ
+local currentMatchArea = 1
+local areaSpawnedEnemies = {}
+local wasTargetingRubble = false
+local lastBorderWaitSeen = {}
+local lastAreaWaitSeen = {}
+
+local function getMatchAreasFolder()
+    local w = workspace:FindFirstChild("World")
+    if w and w:FindFirstChild("Areas") then return w.Areas end
+    if workspace:FindFirstChild("Areas") then return workspace.Areas end
+    if w and w:FindFirstChild("Map") and w.Map:FindFirstChild("Areas") then return w.Map.Areas end
+    if workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Areas") then return workspace.Map.Areas end
+    return nil
+end
+
+local function getCurrentMatchArea()
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    if pg then
+        for _, gName in ipairs({"RoundHUD", "RunSide", "HUD"}) do
+            local g = pg:FindFirstChild(gName)
+            if g then
+                for _, d in ipairs(g:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
+                        local txt = d.Text
+                        if not txt:lower():find("next boss") then
+                            local aMatch = txt:match("[Aa]rea%s*(%d+)")
+                            if aMatch then
+                                local aNum = tonumber(aMatch)
+                                if aNum then return aNum end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return currentMatchArea or 1
+end
+
+local function getAreaCenterPosition(areaNum)
+    local aNum = areaNum or getCurrentMatchArea()
+    local areasFolder = getMatchAreasFolder()
+    if areasFolder then
+        local aPart = areasFolder:FindFirstChild(tostring(aNum))
+        if not aPart and aNum == 1 then
+            aPart = areasFolder:FindFirstChild("1") or areasFolder:FindFirstChildWhichIsA("BasePart")
+        end
+        if aPart and aPart:IsA("BasePart") then
+            return aPart.Position + Vector3.new(0, 1.2, 0)
+        end
+    end
+
+    -- สำหรับแมพที่ไม่มี Areas folder (เช่น Hunter x Hunter ใช้ Border)
+    local mapFolder = workspace:FindFirstChild("World") and workspace.World:FindFirstChild("Map")
+    if mapFolder and aNum and aNum > 1 then
+        local border = mapFolder:FindFirstChild("Border" .. tostring(aNum - 1))
+        if border then
+            local blocker = border:FindFirstChild("Blocker") or border:FindFirstChildWhichIsA("BasePart", true)
+            if blocker then
+                local forwardPos = blocker.Position + (blocker.CFrame.LookVector * 35)
+                return Vector3.new(forwardPos.X, blocker.Position.Y + 1.2, forwardPos.Z)
+            end
+        end
+    end
+    return nil
+end
+
+-- ตรวจสอบสถานะและจำนวน Wave ในด่านปัจจุบัน (เช่น Wave 1/2, Wave 2/2)
+local function getCurrentWaveProgress()
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    if pg then
+        for _, gName in ipairs({"RoundHUD", "RunSide", "HUD", "MobileHUD"}) do
+            local g = pg:FindFirstChild(gName)
+            if g then
+                for _, d in ipairs(g:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
+                        local txt = d.Text
+                        local cw, mw = txt:match("[Ww]ave%s*(%d+)%s*/%s*(%d+)")
+                        if cw and mw then
+                            return tonumber(cw) or 1, tonumber(mw) or 1
+                        end
+                        local cwTh, mwTh = txt:match("เวฟ%s*(%d+)%s*/%s*(%d+)")
+                        if cwTh and mwTh then
+                            return tonumber(cwTh) or 1, tonumber(mwTh) or 1
+                        end
+                    end
+                end
+            end
+        end
+
+        local mh = pg:FindFirstChild("MobileHUD")
+        if mh and mh:FindFirstChild("SafeArea") and mh.SafeArea:FindFirstChild("WaveNotice") then
+            local msg = mh.SafeArea.WaveNotice:FindFirstChild("Message")
+            if msg and msg.Visible and msg.Text:lower():find("next wave starting") then
+                return 1, 2
+            end
+        end
+    end
+    return 1, 1
+end
+
+-- ตรวจสอบว่าเกมขึ้นสถานะให้ทุบ Rubble / กำแพง หรือไม่
+local function isRubbleBreakPhase()
+    local pg = lp and lp:FindFirstChild("PlayerGui")
+    if pg then
+        for _, gName in ipairs({"RoundHUD", "RunSide", "HUD"}) do
+            local g = pg:FindFirstChild(gName)
+            if g then
+                for _, d in ipairs(g:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
+                        local tLow = d.Text:lower()
+                        if tLow:find("break the rubble") or tLow:find("break rubble") or tLow:find("rubble to continue") then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+        local rb = pg:FindFirstChild("RubbleBar") or pg:FindFirstChild("RubbleBossBar")
+        if rb and rb.Enabled then
+            return true
+        end
+    end
+    return false
+end
+
+-- ตรวจสอบเงื่อนไขว่าถึงเวลาตี Rubble / กำแพง หรือยัง
+local function shouldTargetRubble()
+    -- 1. ถ้ายังมีมอนสเตอร์จริงในด่าน ให้ตีมอนสเตอร์ก่อนเสมอ
     if countAliveEnemies and countAliveEnemies() > 0 then
+        return false
+    end
+
+    -- 2. ตรวจสอบสถานะ Wave ในปัจจุบัน
+    local curW, maxW = getCurrentWaveProgress()
+    -- ถ้ายังไม่จบทุกเวฟ (เช่น อยู่เวฟ 1/2 หรือ 1/3) แปลว่ามอนสเตอร์เวฟถัดไปกำลังจะเกิด ห้ามไปตี Rubble / กำแพง เด็ดขาด!
+    if curW < maxW then
+        return false
+    end
+
+    -- 3. ถ้าเกมขึ้น UI บอกให้ทุบ Rubble ชัดเจน (Break the rubble)
+    if isRubbleBreakPhase() then
+        return true
+    end
+
+    -- 4. ถ้าจบเวฟสุดท้ายแล้ว (curW >= maxW) และใน Area นี้เคยมีมอนสเตอร์เกิดแล้ว และตายหมดแล้ว
+    if curW >= maxW and areaSpawnedEnemies[currentMatchArea] then
+        return true
+    end
+
+    return false
+end
+
+-- ตรวจหาและนับสิ่งกีดขวาง Rubble [BREAK IT] (เมื่อไม่มีมอนสเตอร์จริงในด่านแล้ว และจบทุกเวฟแล้วเท่านั้น)
+local function findActiveRubbleTarget()
+    -- มีมอนสเตอร์จริง หรือยังไม่ถึงเวลาทุบกำแพง (เช่น ยังอยู่เวฟ 1/2) ห้ามตีเด็ดขาด!
+    if not shouldTargetRubble() then
         return nil
     end
 
@@ -2382,9 +2544,9 @@ local function findNearestEnemy()
         if bestTarget then return bestTarget end
     end
 
-    -- 2. ★ ตี Rubble / กำแพง เฉพาะเมื่อมอนสเตอร์ในด่านตายหมด 100% แล้วเท่านั้น! ★
-    -- ห้ามเล็งกำแพงก่อนมอนสเตอร์เด็ดขาด!
-    if countAliveEnemies() == 0 then
+    -- 2. ★ ตี Rubble / กำแพง เฉพาะเมื่อมอนสเตอร์ในด่านตายหมด 100% และจบทุกเวฟแล้วเท่านั้น! ★
+    -- ห้ามเล็งกำแพงก่อนมอนสเตอร์เด็ดขาด! และห้ามเล็งระหว่างเวฟ (เช่น จบเวฟ 1/2) เด็ดขาด!
+    if countAliveEnemies() == 0 and shouldTargetRubble() then
         local rubbleTarget = findActiveRubbleTarget()
         if rubbleTarget then
             return rubbleTarget
@@ -2399,21 +2561,6 @@ local activeSkillEndTime = 0
 local lastUltTime = 0
 local skillStepIndex = 1
 local lastElevatorPromptTick = 0
-
-local currentMatchArea = 1
-local areaSpawnedEnemies = {}
-local wasTargetingRubble = false
-local lastBorderWaitSeen = {}
-local lastAreaWaitSeen = {}
-
-local function getMatchAreasFolder()
-    local w = workspace:FindFirstChild("World")
-    if w and w:FindFirstChild("Areas") then return w.Areas end
-    if workspace:FindFirstChild("Areas") then return workspace.Areas end
-    if w and w:FindFirstChild("Map") and w.Map:FindFirstChild("Areas") then return w.Map.Areas end
-    if workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Areas") then return workspace.Map.Areas end
-    return nil
-end
 
 -- ══════════════════════════════════════════════════
 -- AUTO RAID ELEVATOR & SEGMENT TRANSITION HANDLER
@@ -2717,37 +2864,6 @@ local function handleInMatchAreaProgression(hrp)
     end
 end
 
--- ตรวจสอบสถานะและจำนวน Wave ในด่านปัจจุบัน (เช่น Wave 1/2)
-local function getCurrentWaveProgress()
-    local pg = lp and lp:FindFirstChild("PlayerGui")
-    if pg then
-        local rh = pg:FindFirstChild("RunSide") or pg:FindFirstChild("RoundHUD")
-        if rh then
-            for _, d in ipairs(rh:GetDescendants()) do
-                if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
-                    local cw, mw = d.Text:match("[Ww]ave%s*(%d+)%s*/%s*(%d+)")
-                    if cw and mw then
-                        return tonumber(cw) or 1, tonumber(mw) or 1
-                    end
-                    local cwTh, mwTh = d.Text:match("เวฟ%s*(%d+)%s*/%s*(%d+)")
-                    if cwTh and mwTh then
-                        return tonumber(cwTh) or 1, tonumber(mwTh) or 1
-                    end
-                end
-            end
-        end
-
-        local mh = pg:FindFirstChild("MobileHUD")
-        if mh and mh:FindFirstChild("SafeArea") and mh.SafeArea:FindFirstChild("WaveNotice") then
-            local msg = mh.SafeArea.WaveNotice:FindFirstChild("Message")
-            if msg and msg.Visible and msg.Text:lower():find("next wave starting") then
-                return 1, 2
-            end
-        end
-    end
-    return 1, 1
-end
-
 local function executeCombatCycle()
     local char = lp.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -2897,14 +3013,23 @@ local function executeCombatCycle()
         -- ★ ตรวจสอบสถานะ Wave ในห้องปัจจุบัน (เช่น จบเวฟ 1/2) ★
         local curW, maxW = getCurrentWaveProgress()
         if curW < maxW then
-            -- เพิ่งจบเวฟ 1/2: ยืนตรงกลางโซนปัจจุบัน รอมอนสเตอร์เวฟถัดไปเกิด 2 วินาที ห้ามขยับไปไหนเด็ดขาด!
+            -- ★ พอจบเวฟ 1/2 ให้วาร์ปไปตรงกลางยืนเฉยๆ ไม่ต้องตีอะไรเลย จนกว่า target monster จะขึ้น ★
             cleanupFlight()
-            if hrp.Position.Y > 8 then
+            local curArea = getCurrentMatchArea()
+            currentMatchArea = curArea
+            local centerPos = getAreaCenterPosition(curArea)
+            if centerPos then
+                if (hrp.Position - centerPos).Magnitude > 4 then
+                    hrp.CFrame = CFrame.new(centerPos)
+                end
+            elseif hrp.Position.Y > 8 then
                 hrp.CFrame = CFrame.new(hrp.Position.X, 3.0, hrp.Position.Z)
-                if hrp.AssemblyLinearVelocity then hrp.AssemblyLinearVelocity = Vector3.zero end
             end
-            setTask(string.format("⏳ จบเวฟ %d/%d — ยืนตรงกลางโซนรอมอนสเตอร์เกิด (2 วิ)...", curW, maxW))
-            task.wait(2.0)
+            if hrp.AssemblyLinearVelocity then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end
+            setTask(string.format("⏳ จบเวฟ %d/%d — วาร์ปมายืนกลางห้องนิ่งๆ รอ Target Monster เกิด...", curW, maxW))
+            task.wait(0.2)
             return
         end
 
