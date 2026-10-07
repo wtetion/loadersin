@@ -7,17 +7,9 @@
 -- ══════════════════════════════════════════════════
 -- USER CONFIGURATION (ปรับแต่งการทำงานของระบบ)
 -- ══════════════════════════════════════════════════
-getgenv().AZ_Config = getgenv().AZ_Config or {
-    AutoRerollTrait = false,            -- สุ่ม Trait หรือไม่ (true = เปิดสุ่ม Trait 0.04%/0.01% อัตโนมัติ / false = ปิด ให้ลูกค้าสุ่มเอง)
-    AutoSummon      = true,             -- เปิดระบบสุ่มตัวละคร Sub Summon (Slot 1) & สุ่ม Slot 2 หาตัวระดับ LYTH
-    AutoSubSummon   = true, -- สุ่มหาตัวละครเฉพาะใน Sub Summon Slot 1 (เช่น "Dragon Eclipse", "Flame Director") หรือใส่ true เพื่อหาตัวระดับ Mythic-Lyth ทั่วไป
-    AutoAwakening   = true,             -- เปิดระบบฟาร์มของและ Awakening (Evolve) ตัวละครหลักอัตโนมัติ
-    AutoDelivery50  = true,             -- ทำ Delivery Quests 50/50 เควสต์ก่อนอันดับแรก
-    EnglishUI       = true             -- ภาษาของ UI (true = English, false = ภาษาไทย)
-}
 
 if getgenv().AZ_Config.AutoSubSummon == nil then
-    getgenv().AZ_Config.AutoSubSummon = getgenv().AZ_Config.TargetSubSummon or "Dragon Eclipse"
+    getgenv().AZ_Config.AutoSubSummon = true
 end
 if getgenv().AZ_Config.EnglishUI == nil then
     getgenv().AZ_Config.EnglishUI = getgenv().AZ_Config.English or false
@@ -69,28 +61,116 @@ local UserInputService  = game:GetService("UserInputService")
 local VirtualUser       = game:GetService("VirtualUser")
 local RS                = game:GetService("ReplicatedStorage")
 
-local isMatch = (RS:FindFirstChild("performM1") ~= nil) or (workspace:FindFirstChild("enemies") ~= nil)
+-- ตรวจสอบอุปกรณ์อย่างชัดเจน (Mobile vs PC) เพื่อเลือก Input Fallback อย่างใดอย่างหนึ่ง ไม่สลับมั่ว
+-- ตรวจสอบอุปกรณ์อย่างชัดเจน (Mobile vs PC) เพื่อเลือก Input Fallback อย่างใดอย่างหนึ่งตายตัว ไม่สลับไปมา
+local isMobileDevice = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+
+-- ฟังก์ชันคลิกปุ่ม UI ตามประเภทอุปกรณ์อย่างตายตัว (เช็คอุปกรณ์แล้ว Fallback ไปตามอุปกรณ์นั้นเท่านั้น ไม่สลับไปมา)
+local function clickGuiElementSafely(elem)
+    if not elem then return end
+    -- Universal standard สำหรับ Executor ทุกตัว: Activated signal
+    if firesignal and elem:IsA("GuiButton") then
+        pcall(function() firesignal(elem.Activated) end)
+    end
+
+    local vim = game:GetService("VirtualInputManager")
+    if isMobileDevice then
+        -- 📱 เฉพาะ MOBILE FALLBACK (TouchTap + SendTouchEvent เท่านั้น — ไม่แตะ Mouse/Keyboard)
+        pcall(function()
+            if firesignal and elem.TouchTap then
+                firesignal(elem.TouchTap)
+            end
+        end)
+        if vim and elem:IsA("GuiObject") then
+            local pos = elem.AbsolutePosition
+            local size = elem.AbsoluteSize
+            local cx = pos.X + size.X / 2
+            local cy = pos.Y + size.Y / 2
+            pcall(function()
+                vim:SendTouchEvent(1, 0, cx, cy)
+                task.wait(0.02)
+                vim:SendTouchEvent(1, 2, cx, cy)
+            end)
+        end
+    else
+        -- 💻 เฉพาะ PC FALLBACK (MouseButton1 + SendMouseButtonEvent เท่านั้น — ไม่แตะ Touch)
+        pcall(function()
+            if firesignal and elem:IsA("GuiButton") then
+                firesignal(elem.MouseButton1Click)
+                firesignal(elem.MouseButton1Down)
+                task.wait(0.02)
+                firesignal(elem.MouseButton1Up)
+            end
+        end)
+        if vim and elem:IsA("GuiObject") then
+            local pos = elem.AbsolutePosition
+            local size = elem.AbsoluteSize
+            local cx = pos.X + size.X / 2
+            local cy = pos.Y + size.Y / 2
+            pcall(function()
+                vim:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+                task.wait(0.02)
+                vim:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
+            end)
+        end
+    end
+end
+
+local function checkIsMatch()
+    return (game.PlaceId == 109151342576374) or (RS:FindFirstChild("performM1") ~= nil) or (workspace:FindFirstChild("enemies") ~= nil)
+end
+local isMatch = checkIsMatch()
 
 -- ══════════════════════════════════════════════════
 -- 2. GAME PACKETS, CONFIGS & DYNAMIC REFLECTION
 -- ══════════════════════════════════════════════════
-local lobbyPkts     = RS:FindFirstChild("lobby") and RS.lobby:FindFirstChild("packets") and require(RS.lobby.packets)
-local skillTreePkts = RS:FindFirstChild("lobby") and RS.lobby:FindFirstChild("modules") and RS.lobby.modules:FindFirstChild("skillTree") and RS.lobby.modules.skillTree:FindFirstChild("skillTreePackets") and require(RS.lobby.modules.skillTree.skillTreePackets)
-local accountNS     = RS:FindFirstChild("global") and RS.global:FindFirstChild("stores") and RS.global.stores:FindFirstChild("accountNamespace") and require(RS.global.stores.accountNamespace)
+local function safeRequire(obj)
+    if not obj then return nil end
+    local ok, res = pcall(require, obj)
+    if not ok and obj:IsA("ModuleScript") then
+        pcall(function()
+            local clone = obj:Clone()
+            clone.Parent = obj.Parent
+            local cOk, cRes = pcall(require, clone)
+            if cOk then
+                res = cRes
+                ok = true
+            end
+            clone:Destroy()
+        end)
+    end
+    return ok and res or nil
+end
 
--- Dynamic Game Engines & Reflection (อัปเดตตามเกมใหม่อัตโนมัติ 100% โดยไม่ต้อง Hardcode)
-local mapsConstant    = RS:FindFirstChild("global") and RS.global:FindFirstChild("constants") and RS.global.constants:FindFirstChild("maps") and require(RS.global.constants.maps)
-local diffsConstant   = RS:FindFirstChild("global") and RS.global:FindFirstChild("constants") and RS.global.constants:FindFirstChild("difficulties") and require(RS.global.constants.difficulties)
-local charsConstant   = RS:FindFirstChild("global") and RS.global:FindFirstChild("constants") and RS.global.constants:FindFirstChild("characters") and require(RS.global.constants.characters)
-local charRollCfg     = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("characterRollConfig") and require(RS.assets.config.characterRollConfig)
-local raidUnitCfg     = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("RaidUnitConfig") and require(RS.assets.config.RaidUnitConfig)
-local codesCfg        = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("codesConfig") and require(RS.assets.config.codesConfig)
-local matDropCfg      = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("materialDropConfig") and require(RS.assets.config.materialDropConfig)
-local traitCfg        = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("Traits") and RS.assets.config.Traits:FindFirstChild("traitConfig") and require(RS.assets.config.Traits.traitConfig)
-local titleCfg        = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("titleConfig") and require(RS.assets.config.titleConfig)
-local accCraftCfg     = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("accessoryCraftConfig") and require(RS.assets.config.accessoryCraftConfig)
-local economyCfg      = RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("economyConfig") and require(RS.assets.config.economyConfig)
-local charProg       = RS:FindFirstChild("global") and RS.global:FindFirstChild("utils") and RS.global.utils:FindFirstChild("characterLevelProgression") and require(RS.global.utils.characterLevelProgression)
+local lobbyPkts
+local function getLobbyPackets()
+    if not lobbyPkts then
+        pcall(function()
+            local l = RS:FindFirstChild("lobby") or RS:WaitForChild("lobby", 5)
+            local p = l and (l:FindFirstChild("packets") or l:WaitForChild("packets", 5))
+            if p then lobbyPkts = safeRequire(p) end
+        end)
+    end
+    return lobbyPkts
+end
+lobbyPkts = getLobbyPackets()
+
+local skillTreePkts = safeRequire(RS:FindFirstChild("lobby") and RS.lobby:FindFirstChild("modules") and RS.lobby.modules:FindFirstChild("skillTree") and RS.lobby.modules.skillTree:FindFirstChild("skillTreePackets"))
+local accountNS     = safeRequire(RS:FindFirstChild("global") and RS.global:FindFirstChild("stores") and RS.global.stores:FindFirstChild("accountNamespace"))
+
+-- Dynamic Game Engines & Reflection (อัปเดตตามเกมใหม่อัตโนมัติ 100% โดยไม่ต้อง Hardcode ป้องกัน error จากโมดูลที่ยังไม่พร้อม)
+local mapsConstant    = safeRequire(RS:FindFirstChild("global") and RS.global:FindFirstChild("constants") and RS.global.constants:FindFirstChild("maps"))
+local diffsConstant   = safeRequire(RS:FindFirstChild("global") and RS.global:FindFirstChild("constants") and RS.global.constants:FindFirstChild("difficulties"))
+local charsConstant   = safeRequire(RS:FindFirstChild("global") and RS.global:FindFirstChild("constants") and RS.global.constants:FindFirstChild("characters"))
+local charRollCfg     = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("characterRollConfig"))
+local raidUnitCfg     = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("RaidUnitConfig"))
+local codesCfg        = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("codesConfig"))
+local matDropCfg      = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("materialDropConfig"))
+local traitCfg        = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("Traits") and RS.assets.config.Traits:FindFirstChild("traitConfig"))
+local titleCfg        = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("titleConfig"))
+local accCraftCfg     = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("accessoryCraftConfig"))
+local economyCfg      = safeRequire(RS:FindFirstChild("assets") and RS.assets:FindFirstChild("config") and RS.assets.config:FindFirstChild("economyConfig"))
+local charProg        = safeRequire(RS:FindFirstChild("global") and RS.global:FindFirstChild("utils") and RS.global.utils:FindFirstChild("characterLevelProgression"))
 
 local _reqId = 0
 local function nextId()
@@ -170,6 +250,14 @@ local function getDynamicPromoCodes(playerLevel)
 end
 
 local function getAccState()
+    if not accountNS then
+        pcall(function()
+            local g = RS:FindFirstChild("global") or RS:WaitForChild("global", 5)
+            local st = g and (g:FindFirstChild("stores") or g:WaitForChild("stores", 5))
+            local ns = st and (st:FindFirstChild("accountNamespace") or st:WaitForChild("accountNamespace", 5))
+            if ns then accountNS = require(ns) end
+        end)
+    end
     if not accountNS then return nil end
     local acc = accountNS.getPlayerAccount(lp) or accountNS.getLocalPlayerAccount()
     return acc and acc.state or nil
@@ -191,25 +279,61 @@ end
 local function getCharacter()
     local s = getAccState()
     if s and s.character ~= nil then
-        return tostring(readVal(s.character))
+        local c = readVal(s.character)
+        if c and tostring(c) ~= "" then return tostring(c):lower() end
+    end
+    if s and s.UnlockedCharacters then
+        local slots = (type(s.UnlockedCharacters) == "table" and (s.UnlockedCharacters.entries or s.UnlockedCharacters.current or s.UnlockedCharacters)) or {}
+        local s1 = slots[1] or slots["1"] or slots["Slot1"]
+        if s1 and s1.Character then
+            local c = readVal(s1.Character)
+            if c and tostring(c) ~= "" then return tostring(c):lower() end
+        end
     end
     local char = lp.Character
     if char and char:FindFirstChild("CharacterName") then
-        return char.CharacterName.Value
+        local val = tostring(char.CharacterName.Value):lower()
+        if val ~= "" then return val end
     end
-    return "SHANKS"
+    return "guts"
 end
 
 local function getCharacterDisplayName(charKey)
     charKey = charKey or getCharacter()
-    if not charKey then return "None" end
+    if not charKey or charKey == "" then return "None" end
     local low = tostring(charKey):lower()
+
+    local KNOWN_NAMES = {
+        guts = "Dragon Eclipse",
+        saber = "Lights of Divinity",
+        alucard = "Immortal Sovereign",
+        sukuna = "Cursed King",
+        shanks = "Divine Emperor",
+        miyabi = "Cataclysm",
+        hutao = "Flame Director",
+        luffy = "Rubber Man",
+        goku = "Cosmic Warrior",
+        killua = "Thunder Prodigy",
+        juuzou = "Twisted Agony",
+        nagumo = "King's Gambit"
+    }
+    if KNOWN_NAMES[low] then
+        return KNOWN_NAMES[low]
+    end
+
     if charsConstant and charsConstant.charactersByName then
         local cDef = charsConstant.charactersByName[low]
         if cDef and cDef.displayName then
             return cDef.displayName
         end
     end
+    if charsConstant and charsConstant[low] then
+        local cDef = charsConstant[low]
+        if cDef and cDef.displayName then
+            return cDef.displayName
+        end
+    end
+
     return tostring(charKey):upper()
 end
 
@@ -393,8 +517,40 @@ local function hasOwnedCharacter(charName)
     return false
 end
 
+local function isLythTier(rName, cName)
+    if rName then
+        local rLow = tostring(rName):lower()
+        if rLow:find("zenless") or rLow:find("lyth") or rLow:find("exclusive") then return true end
+    end
+    if cName then
+        local cClean = tostring(cName):lower():gsub("[%s_%-]", "")
+        if cClean == "miyabi" or cClean == "hutao" or cClean:find("cataclysm") or cClean:find("flamedirector") then
+            return true
+        end
+    end
+    return false
+end
+
 -- ค้นหาและดึงตัวละครระดับ LYTH (Zenless / Exclusive) ที่ผู้เล่นครอบครองอยู่ (ทั้งจาก Summon หรือ Raid)
 local function getOwnedLythCharacter()
+    -- 1. ตรวจสอบจากสล็อต 1..4 โดยตรง
+    local s = getAccState()
+    if s and s.UnlockedCharacters then
+        local slots = (type(s.UnlockedCharacters) == "table" and (s.UnlockedCharacters.entries or s.UnlockedCharacters.current or s.UnlockedCharacters)) or {}
+        for _, slot in pairs(slots) do
+            if type(slot) == "table" then
+                local cVal = slot.Character and (type(slot.Character) == "table" and (slot.Character.current or slot.Character.value or slot.Character._value) or slot.Character)
+                if cVal and tostring(cVal) ~= "" then
+                    local cName = tostring(cVal):lower()
+                    if isLythTier(nil, cName) then
+                        return cName
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2. ตรวจสอบจากตู้หรือประวัติการครอบครอง
     local lythChars = getDynamicCharactersByRarity("Zenless")
     if #lythChars == 0 then lythChars = {"hutao", "miyabi"} end
     for _, c in ipairs(lythChars) do
@@ -419,13 +575,134 @@ local function hasMiyabi()
     return hasOwnedCharacter("miyabi")
 end
 
+local MYTHIC_PLUS_IDS = {
+    ["saber"] = true,
+    ["guts"] = true,
+    ["alucard"] = true,
+    ["sukuna"] = true,
+    ["shanks"] = true,
+    ["miyabi"] = true,
+    ["hutao"] = true
+}
+
+local MYTHIC_PLUS_DISPLAY = {
+    ["lightsofdivinity"] = true,
+    ["dragoneclipse"] = true,
+    ["immortalsovereign"] = true,
+    ["cursedking"] = true,
+    ["divineemperor"] = true,
+    ["cataclysm"] = true,
+    ["flamedirector"] = true
+}
+
+local function getCharacterRarity(cName)
+    if not cName or cName == "" then return "None" end
+    local clean = tostring(cName):lower():gsub("[%s_%-]", "")
+
+    if clean == "miyabi" or clean == "hutao" or clean:find("cataclysm") or clean:find("flamedirector") then
+        return "Zenless"
+    end
+    if clean == "sukuna" or clean == "shanks" or clean:find("cursedking") or clean:find("divineemperor") then
+        return "Arcane"
+    end
+    if clean == "saber" or clean == "guts" or clean == "alucard" or clean:find("dragoneclipse") or clean:find("lightsofdivinity") or clean:find("immortalsovereign") then
+        return "Mythic"
+    end
+    if clean == "juuzou" or clean == "nagumo" or clean:find("twistedagony") or clean:find("kingsgambit") then
+        return "Legendary"
+    end
+    if clean == "luffy" or clean == "goku" or clean == "killua" or clean:find("rubberman") or clean:find("cosmicwarrior") or clean:find("thunderprodigy") then
+        return "Epic"
+    end
+
+    if charRollCfg and charRollCfg.rarities then
+        for rName, rData in pairs(charRollCfg.rarities) do
+            if rData.characters then
+                for _, c in ipairs(rData.characters) do
+                    if tostring(c):lower() == clean then
+                        return rName
+                    end
+                end
+            end
+        end
+    end
+
+    return "Unknown"
+end
+
+local function isMythicOrHigher(rName, cName)
+    if rName then
+        local rLow = tostring(rName):lower()
+        if rLow:find("myth") or rLow:find("arcane") or rLow:find("zenless") or rLow:find("lyth") or rLow:find("exclusive") then
+            return true
+        end
+    end
+    if cName then
+        local cClean = tostring(cName):lower():gsub("[%s_%-]", "")
+        if MYTHIC_PLUS_IDS[cClean] or MYTHIC_PLUS_DISPLAY[cClean] then
+            return true
+        end
+        for id, _ in pairs(MYTHIC_PLUS_IDS) do
+            if cClean:find(id, 1, true) then return true end
+        end
+        for dName, _ in pairs(MYTHIC_PLUS_DISPLAY) do
+            if cClean:find(dName, 1, true) then return true end
+        end
+    end
+    return false
+end
+
+-- (isLythTier ประกาศไว้ด้านบนแล้ว)
+
+-- (getSlotCharacterInfo ถูกประกาศไว้ด้านบนแล้ว)
+
+-- ค้นหาตัวละครที่ดีที่สุดที่ครอบครองอยู่ในสล็อต 1..4 (Zenless/Lyth > Arcane > Mythic > Legendary)
+-- กฎเหล็ก: ถ้ายังไม่มีตัวระดับ Lyth ให้เลือกตัวฟาร์มหลักใน Slot 1 เสมอ (ห้ามเอาตัวสุ่มค้างใน Slot 2 มาใช้เด็ดขาด!)
+local function getBestOwnedCharacter()
+    local ok, res = pcall(function()
+        -- ก. ถ้าได้ Hu Tao มาและยังไม่ได้ Awakening: ให้สวมใส่ Hu Tao ชั่วคราวเพื่อทำ Awakening ให้เสร็จ
+        if hasFlameDirector() and not isCharacterAwakened("hutao") then
+            return "hutao"
+        end
+
+        -- ข. ลำดับหลัก: ใช้ตัวระดับ LYTH ที่ได้จาก Summon เสมอ (เช่น Miyabi)
+        local summonSlot, summonLyth = getSummonLythInfo()
+        if summonLyth then
+            return summonLyth
+        end
+
+        -- ค. ตัวละครระดับ LYTH ทั่วไป (เช่น Hu Tao หลังจาก Awakening เสร็จแล้ว หรือตัว Lyth อื่น)
+        local lyth = getOwnedLythCharacter()
+        if lyth then return lyth end
+
+        -- ง. ถ้ายังไม่มีตัวระดับ Lyth: ให้ใช้ตัวละครหลักใน Slot 1 เท่านั้น!
+        local s1Char, s1Rarity = getSlotCharacterInfo(1)
+        if s1Char and s1Char ~= "" then
+            return s1Char:lower()
+        end
+
+        local s = getAccState()
+        if not s or not s.UnlockedCharacters then return nil end
+        local slots = (type(s.UnlockedCharacters) == "table" and (s.UnlockedCharacters.entries or s.UnlockedCharacters.current or s.UnlockedCharacters)) or {}
+        local slot1 = slots.Slot1 or slots["1"]
+        if slot1 then
+            local cVal = slot1.Character and (type(slot1.Character) == "table" and (slot1.Character.current or slot1.Character.value or slot1.Character._value) or slot1.Character)
+            if cVal and tostring(cVal) ~= "" then return tostring(cVal):lower() end
+        end
+        return nil
+    end)
+    if ok and res then return res end
+    return nil
+end
+
 -- สลับสวมใส่ตัวละครโดยอัตโนมัติหากครอบครองอยู่ในสล็อต (1..4)
-local function autoEquipCharacterIfOwned(charName)
+local function autoEquipCharacterIfOwned(charName, force)
+    if not lobbyPkts then lobbyPkts = getLobbyPackets() end
     if not lobbyPkts or not lobbyPkts.equipCharacterSlot then return end
     local s = getAccState()
     if not s or not s.UnlockedCharacters then return end
     local target = charName:lower()
-    if getCharacter():lower() == target then return end
+    if not force and getCharacter():lower() == target then return end
 
     local slots = (type(s.UnlockedCharacters) == "table" and (s.UnlockedCharacters.entries or s.UnlockedCharacters.current or s.UnlockedCharacters)) or {}
     for slotKey, slot in pairs(slots) do
@@ -433,6 +710,10 @@ local function autoEquipCharacterIfOwned(charName)
             local cVal = slot.Character and (type(slot.Character) == "table" and (slot.Character.current or slot.Character.value or slot.Character._value) or slot.Character)
             if tostring(cVal):lower() == target then
                 local slotNum = tonumber(tostring(slotKey):match("%d+")) or 1
+                -- ความปลอดภัยสูงสุด: ถ้า slotNum == 2 แต่ตัวละครไม่ใช่ระดับ Lyth ห้ามสวมใส่เด็ดขาด!
+                if slotNum == 2 and not isLythTier(nil, target) then
+                    return
+                end
                 setTask(string.format("🔄 สวมใส่ตัวละคร %s จากสล็อต %d...", target:upper(), slotNum))
                 pcall(function()
                     lobbyPkts.equipCharacterSlot:fire({
@@ -451,6 +732,130 @@ local function autoEquipCharacterIfOwned(charName)
     end
 end
 
+-- มั่นใจ 100% ว่าสวมใส่ตัวละครที่ถูกต้องตามระบบ:
+-- 1. ถ้ามีตัวละครระดับ LYTH แล้ว (เช่น Miyabi / Hutao) ต้องสวมใส่ตัว Lyth เสมอ 100%!
+-- 2. ถ้ายังไม่มีตัวระดับ Lyth: ให้สวมใส่ตัวฟาร์มหลักใน Slot 1 (เช่น Dragon Eclipse / Guts)
+-- ห้ามสลับไปใช้ตัวขยะ/ตัวสุ่มค้างใน Slot 2 เด็ดขาดจนกว่าจะได้ระดับ Lyth
+local function ensureCorrectCharacterEquipped()
+    if isMatch then return end
+
+    -- ก. ถ้าได้ Hu Tao มาและยังไม่ได้ Awakening: ให้สวมใส่ Hu Tao เพื่อทำ Awakening ให้เสร็จ
+    if hasFlameDirector() and not isCharacterAwakened("hutao") then
+        autoEquipCharacterIfOwned("hutao")
+        return
+    end
+
+    -- ข. สวมใส่ตัวละครระดับ LYTH ที่ได้จาก Summon เสมอ 100% (เช่น Miyabi)!
+    local summonSlot, summonLyth = getSummonLythInfo()
+    if summonLyth then
+        autoEquipCharacterIfOwned(summonLyth)
+        return
+    end
+
+    -- ค. ตัว Lyth ทั่วไป
+    local hasLyth, lythChar = hasAnyLythCharacter()
+    if hasLyth and lythChar then
+        autoEquipCharacterIfOwned(lythChar)
+        return
+    end
+
+    -- ข. ถ้ายังไม่มีตัวระดับ Lyth: สลับกลับมาใช้ตัวฟาร์มหลักใน Slot 1
+    local s1Char, s1Rarity = getSlotCharacterInfo(1)
+    if not s1Char or s1Char == "" then return end
+
+    local curChar = getCharacter():lower()
+    if curChar ~= s1Char:lower() then
+        setTask(string.format("🔄 สลับกลับมาใช้ตัวฟาร์มหลัก Slot 1 (%s)...", s1Char:upper()))
+        pcall(function()
+            if not lobbyPkts then lobbyPkts = getLobbyPackets() end
+            if lobbyPkts and lobbyPkts.equipCharacterSlot then
+                lobbyPkts.equipCharacterSlot:fire({
+                    slot = 1,
+                    gameSlot = 1,
+                    requestId = nextId()
+                })
+            end
+        end)
+        task.wait(0.35)
+        if upgradeActiveSkillsIfPointsAvailable then
+            pcall(function() upgradeActiveSkillsIfPointsAvailable(s1Char) end)
+        end
+    end
+end
+local ensureSlot1Equipped = ensureCorrectCharacterEquipped
+
+-- ค้นหาข้อมูลตัวละครระดับ Lyth ที่ได้จาก Summon (ไม่ใช่ Hu Tao จาก Raid)
+local function getSummonLythInfo()
+    local s = getAccState()
+    if s and s.UnlockedCharacters then
+        local slots = (type(s.UnlockedCharacters) == "table" and (s.UnlockedCharacters.entries or s.UnlockedCharacters.current or s.UnlockedCharacters)) or {}
+        for slotKey, slot in pairs(slots) do
+            if type(slot) == "table" then
+                local cVal = slot.Character and (type(slot.Character) == "table" and (slot.Character.current or slot.Character.value or slot.Character._value) or slot.Character)
+                if cVal and tostring(cVal) ~= "" then
+                    local cName = tostring(cVal):lower()
+                    local slotNum = tonumber(tostring(slotKey):match("%d+")) or 1
+                    if isLythTier(nil, cName) and cName ~= "hutao" and not cName:find("flamedirector") then
+                        return slotNum, cName
+                    end
+                end
+            end
+        end
+    end
+    if hasOwnedCharacter("miyabi") then
+        return 2, "miyabi"
+    end
+    return nil, nil
+end
+
+-- นำตัวละคร Flame Director (Hu Tao) จาก Raid ไปใส่ในช่องที่ไม่ใช่ช่อง Lyth จาก Summon
+-- ★ กฎเหล็ก: ห้ามทับช่องตัวระดับ Lyth ที่ได้จาก Summon (เช่น Miyabi) เด็ดขาด! ★
+local function placeHuTaoInNonSummonSlot()
+    if not hasFlameDirector() then return false end
+    if not lobbyPkts or not lobbyPkts.placeStoredUnit then
+        lobbyPkts = getLobbyPackets()
+    end
+    if not lobbyPkts or not lobbyPkts.placeStoredUnit then return false end
+
+    -- ตรวจสอบก่อนว่า Hu Tao อยู่ในสล็อตใดสล็อตหนึ่งอยู่แล้วหรือไม่
+    local s = getAccState()
+    if s and s.UnlockedCharacters then
+        for slotKey, slot in pairs(s.UnlockedCharacters) do
+            if type(slot) == "table" then
+                local cVal = slot.Character and (type(slot.Character) == "table" and (slot.Character.current or slot.Character.value or slot.Character._value) or slot.Character)
+                if tostring(cVal):lower() == "hutao" then
+                    return true -- มี Hu Tao ในช่องอยู่แล้ว ไม่ต้องย้ายซ้ำ
+                end
+            end
+        end
+    end
+
+    local summonSlot, summonLyth = getSummonLythInfo()
+
+    -- ค้นหาช่องที่ Unlocked แล้ว และไม่ใช่ช่อง Summon Lyth (ห้ามทับช่อง Lyth จาก Summon เด็ดขาด!)
+    -- ลำดับค้นหา: Slot 1 -> Slot 3 -> Slot 4 -> Slot 2
+    local searchSlots = {1, 3, 4, 2}
+    for _, slotNum in ipairs(searchSlots) do
+        if slotNum ~= summonSlot then
+            local cName, cRarity, isUnl = getSlotCharacterInfo(slotNum)
+            if isUnl and (not isLythTier(cRarity, cName) or cName == "hutao") then
+                setTask(string.format("📥 นำ Flame Director (Hu Tao) เข้า Slot %d (ไม่ทับช่อง %s)...", slotNum, summonLyth and summonLyth:upper() or "SUMMON LYTH"))
+                pcall(function()
+                    lobbyPkts.placeStoredUnit:fire({
+                        character = "hutao",
+                        slot = slotNum,
+                        requestId = nextId()
+                    })
+                end)
+                task.wait(0.5)
+                return true
+            end
+        end
+    end
+    return false
+end
+local placeHuTaoInNonLythSlot = placeHuTaoInNonSummonSlot
+
 -- ดึงจำนวน Material ในตัวของผู้เล่น
 local function getMaterialCount(idStr)
     local s = getAccState()
@@ -461,29 +866,95 @@ local function getMaterialCount(idStr)
     return tonumber(v) or 0
 end
 
--- 3. AUTO UNLOCK & AUTO EQUIP BEST TITLE
+-- 3. AUTO UNLOCK & AUTO EQUIP BEST TITLE STAT (คำนวณคะแนน Stat และสวมใส่ฉายาที่ดีที่สุดอัตโนมัติทุกครั้ง)
+local function getTitleConfig()
+    if not titleCfg then
+        local a = RS:FindFirstChild("assets") or RS:WaitForChild("assets", 3)
+        local c = a and (a:FindFirstChild("config") or a:WaitForChild("config", 3))
+        local tc = c and (c:FindFirstChild("titleConfig") or c:WaitForChild("titleConfig", 3))
+        if tc then titleCfg = safeRequire(tc) end
+    end
+    return titleCfg
+end
+
+local function calcTitleStatScore(titleData)
+    if not titleData then return -1 end
+    local score = 0
+    local buffs = titleData.Buffs or {}
+    for _, b in ipairs(buffs) do
+        local bType = tostring(b.Type or "")
+        local val = tonumber(b.Percent or b.Amount or 0) or 0
+        if bType == "Damage" then
+            score = score + val * 10
+        elseif bType:find("Critical") then
+            score = score + val * 8
+        elseif bType == "Drop Rate" then
+            score = score + val * 7
+        elseif bType == "Cooldown Reduction" then
+            score = score + val * 6
+        elseif bType == "Coins" then
+            score = score + val * 5
+        elseif bType == "Exp" then
+            score = score + val * 4
+        elseif bType == "HP" then
+            score = score + val * 2
+        elseif bType == "Walk Speed" then
+            score = score + val * 2
+        else
+            score = score + val
+        end
+    end
+    local tier = tonumber(titleData.Tier) or 1
+    score = score + tier * 0.1
+    return score
+end
+
+local function formatTitleBuffs(titleData)
+    if not titleData or not titleData.Buffs or #titleData.Buffs == 0 then return "ไม่มีบัฟ" end
+    local parts = {}
+    for _, b in ipairs(titleData.Buffs) do
+        local bType = tostring(b.Type or "")
+        local val = b.Percent or b.Amount or 0
+        local sign = (b.Percent and "%") or ""
+        table.insert(parts, string.format("%s +%s%s", bType, tostring(val), sign))
+    end
+    return table.concat(parts, ", ")
+end
+
 local function autoEquipBestTitle()
     local s = getAccState()
     if not s or not s.title then return end
     local titles = (type(s.title) == "table" and (s.title.entries or s.title.current or s.title)) or {}
     local curEquipped = tostring(readVal(s.equippedTitle) or "")
 
+    local cfg = getTitleConfig()
     local bestId = nil
-    local bestNum = -1
+    local bestScore = -1
+    local bestTitleData = nil
+
     for id, v in pairs(titles) do
         local isUnlocked = (type(v) == "table" and (v.current == true or v.value == true)) or (v == true)
         if isUnlocked then
-            local num = tonumber(id) or 0
-            if num > bestNum then
-                bestNum = num
-                bestId = tostring(id)
+            local strId = tostring(id)
+            local tData = cfg and cfg[strId]
+            local score = calcTitleStatScore(tData)
+            if score <= 0 then
+                score = (tonumber(strId) or 0) * 0.001
+            end
+            if score > bestScore then
+                bestScore = score
+                bestId = strId
+                bestTitleData = tData
             end
         end
     end
 
     if bestId and bestId ~= curEquipped then
-        setTask(string.format("👑 สวมใส่ฉายาที่ดีที่สุด: Title #%s", bestId))
+        local tName = bestTitleData and bestTitleData.Name or string.format("Title #%s", bestId)
+        local buffsDesc = formatTitleBuffs(bestTitleData)
+        setTask(string.format("👑 สวมใส่ฉายา Stat ดีที่สุด: %s [#%s] (%s)", tName, bestId, buffsDesc))
         pcall(function()
+            lobbyPkts = getLobbyPackets()
             if lobbyPkts and lobbyPkts.equipTitle then lobbyPkts.equipTitle:fire(bestId) end
             if RS:FindFirstChild("EquipTitle") then RS.EquipTitle:FireServer(bestId) end
         end)
@@ -737,6 +1208,8 @@ end
 
 local function autoCompleteDeliveryQuests50()
     if isMatch or not lobbyPkts or not lobbyPkts.deliveryAction or not lobbyPkts.deliveryState then return end
+    if not (getgenv().AZ_Config and getgenv().AZ_Config.AutoDelivery50 == true) then return end
+    if getPlayerLevel and getPlayerLevel() >= 10 then return end
     
     local char = lp.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -781,7 +1254,7 @@ local function autoCompleteDeliveryQuests50()
         return nil
     end
 
-    local safetyTimeout = tick() + 240 -- 4 นาที
+    local safetyTimeout = tick() + 3 -- สูงสุด 3 วิ ป้องกันค้าง Lobby เด็ดขาด
     while tick() < safetyTimeout do
         if isMatch then break end
         char = lp.Character
@@ -851,40 +1324,12 @@ end
 local upgradeActiveSkillsIfPointsAvailable = nil
 
 -- ==================================================
+-- ==================================================
 -- CHARACTER RARITY & SLOT SUMMON CONTROLLER
 -- ตรวจสอบและสุ่มตัวละคร:
 --  - ช่อง 1 (Sub Summon): สุ่มด้วย Normal Spin ให้ถึง Mythical - Lyth
 --  - ช่อง 2: ปลดล็อค -> สุ่มหาตัวระดับ LYTH (Zenless / Miyabi) เท่านั้น!
 -- ==================================================
-local function getCharacterRarity(cName)
-    if not cName or cName == "" then return "None" end
-    cName = tostring(cName):lower()
-    if charRollCfg and charRollCfg.rarities then
-        for rName, rData in pairs(charRollCfg.rarities) do
-            if rData.characters then
-                for _, c in ipairs(rData.characters) do
-                    if tostring(c):lower() == cName then
-                        return rName
-                    end
-                end
-            end
-        end
-    end
-    if cName == "miyabi" then return "Zenless" end
-    if cName == "sukuna" or cName == "shanks" then return "Arcane" end
-    if cName == "saber" or cName == "guts" or cName == "alucard" then return "Mythic" end
-    if cName == "juuzou" or cName == "nagumo" then return "Legendary" end
-    if cName == "luffy" or cName == "goku" or cName == "killua" then return "Epic" end
-    return "Unknown"
-end
-
-local function isMythicOrHigher(rName)
-    return rName == "Mythic" or rName == "Arcane" or rName == "Zenless"
-end
-
-local function isLythTier(rName, cName)
-    return rName == "Zenless" or tostring(cName):lower() == "miyabi" or tostring(cName):lower() == "hutao"
-end
 
 local function getSlotUnlockCost(slotNum)
     if economyCfg and economyCfg.characterSlotUnlockCosts and economyCfg.characterSlotUnlockCosts[slotNum] then
@@ -913,22 +1358,25 @@ local function getRollCurrencyAvailable()
     local c = s and s.currencies
     local rollsLeft = c and c.rolls and tonumber(readVal(c.rolls)) or 0
     local moneyLeft = c and c.money and tonumber(readVal(c.money)) or 0
+    if rollsLeft <= 0 then
+        rollsLeft = tonumber(getCurrency("rolls")) or 0
+    end
+    if moneyLeft <= 0 then
+        moneyLeft = tonumber(getCurrency("money")) or 0
+    end
     if rollsLeft > 0 then return "rolls", rollsLeft end
-    if moneyLeft >= 2500 then return "money", moneyLeft end
+    if moneyLeft >= 500 then return "money", moneyLeft end
     return nil, 0
 end
 
 local function getTargetSubSummonName()
     local cfg = getgenv().AZ_Config
     if not cfg then return nil end
-    if type(cfg.AutoSubSummon) == "string" and cfg.AutoSubSummon ~= "" then
+    if type(cfg.AutoSubSummon) == "string" and cfg.AutoSubSummon ~= "" and cfg.AutoSubSummon ~= "true" then
         return cfg.AutoSubSummon
     end
-    if type(cfg.TargetSubSummon) == "string" and cfg.TargetSubSummon ~= "" then
+    if type(cfg.TargetSubSummon) == "string" and cfg.TargetSubSummon ~= "" and cfg.TargetSubSummon ~= "true" then
         return cfg.TargetSubSummon
-    end
-    if type(cfg.AutoSummon) == "string" and cfg.AutoSummon ~= "" then
-        return cfg.AutoSummon
     end
     return nil
 end
@@ -940,11 +1388,16 @@ local function isMatchingCharacterName(curChar, targetName)
     if c1 == c2 or c1:find(c2, 1, true) or c2:find(c1, 1, true) then
         return true
     end
+    local dName = getCharacterDisplayName(curChar):lower():gsub("[%s_%-]", "")
+    if dName == c2 or dName:find(c2, 1, true) or c2:find(dName, 1, true) then
+        return true
+    end
     if charsConstant then
-        local cDef = charsConstant[curChar] or charsConstant[tostring(curChar):lower()]
+        local cDef = (charsConstant.charactersByName and charsConstant.charactersByName[tostring(curChar):lower()])
+            or charsConstant[curChar] or charsConstant[tostring(curChar):lower()]
         if cDef and cDef.displayName then
-            local dName = tostring(cDef.displayName):lower():gsub("[%s_%-]", "")
-            if dName == c2 or dName:find(c2, 1, true) or c2:find(dName, 1, true) then
+            local dn = tostring(cDef.displayName):lower():gsub("[%s_%-]", "")
+            if dn == c2 or dn:find(c2, 1, true) or c2:find(dn, 1, true) then
                 return true
             end
         end
@@ -952,40 +1405,150 @@ local function isMatchingCharacterName(curChar, targetName)
     return false
 end
 
+local function isSlotDataStable()
+    local s = getAccState()
+    if not s or not s.UnlockedCharacters then return false end
+    local s1 = s.UnlockedCharacters.Slot1
+    if not s1 then return false end
+    local cVal = s1.Character and (type(s1.Character) == "table" and (s1.Character.current or s1.Character.value or s1.Character._value) or s1.Character)
+    return (cVal ~= nil and tostring(cVal) ~= "")
+end
+
+local function waitForSlotDataStable(timeout)
+    timeout = timeout or 3.5
+    local startT = tick()
+    while tick() - startT < timeout do
+        if isSlotDataStable() then return true end
+        task.wait(0.2)
+    end
+    return isSlotDataStable()
+end
+
 local function isSlot1Satisfied(slot1Char, slot1Rarity)
+    local cfg = getgenv().AZ_Config
+    if not cfg then return true end
+    if cfg.AutoSubSummon == false then return true end
+
+    -- ถ้า Slot 1 เป็น Lyth อยู่แล้ว: พอใจ 100% ทันที
+    if isLythTier(slot1Rarity, slot1Char) then return true end
+
+    -- ถ้าผู้เล่นมีตัวระดับ Lyth ในตัวอยู่แล้ว: ไม่ต้องค้างใน Slot 1 อีก ถือว่าผ่านทันที!
+    if hasAnyLythCharacter() then return true end
+
+    -- ถ้าตัวปัจจุบันคือระดับ Mythic, Arcane, Zenless (Mythic-Lyth)
+    if isMythicOrHigher(slot1Rarity, slot1Char) then
+        local targetSub = getTargetSubSummonName()
+        -- ถ้าไม่ได้ระบุชื่อเฉพาะ (เช่น AutoSubSummon = true) ให้เก็บ Mythic-Lyth ทันที 100%!
+        if not targetSub or targetSub == "" or targetSub == true then
+            return true
+        end
+        -- ถ้าระบุชื่อเฉพาะ ให้เช็คว่าตรงชื่อหรือไม่
+        if isMatchingCharacterName(slot1Char, targetSub) then
+            return true
+        end
+    end
+
     local targetSub = getTargetSubSummonName()
-    if targetSub then
+    if targetSub and type(targetSub) == "string" and targetSub ~= "" then
         return isMatchingCharacterName(slot1Char, targetSub)
     end
-    return isMythicOrHigher(slot1Rarity)
+
+    return isMythicOrHigher(slot1Rarity, slot1Char)
+end
+
+local _lastRolledResult = nil
+local _characterRolledHooked = false
+local function ensureCharacterRolledHook()
+    if _characterRolledHooked then return end
+    if lobbyPkts and lobbyPkts.characterRolled and lobbyPkts.characterRolled.on then
+        pcall(function()
+            lobbyPkts.characterRolled:on(function(data)
+                if type(data) == "table" and data.success then
+                    _lastRolledResult = data
+                end
+            end)
+            _characterRolledHooked = true
+        end)
+    end
 end
 
 local function autoSummonSlotsManager()
+    lobbyPkts = getLobbyPackets()
     if isMatch or not lobbyPkts or not lobbyPkts.rollCharacter then return false end
     if not (getgenv().AZ_Config and getgenv().AZ_Config.AutoSummon) then return false end
+
+    ensureCharacterRolledHook()
+
+    -- ป้องกันปัญหาเช็คเร็วเกินไปตอนเพิ่งเข้า Lobby: รอให้ข้อมูลตัวละครในสล็อตซิงค์เรียบร้อยก่อน
+    if not waitForSlotDataStable(3.5) then
+        setTask("⏳ กำลังรอโหลดข้อมูลตัวละครในสล็อตจากเซิร์ฟเวอร์...")
+        return false
+    end
+
+    -- ★ ถ้าผู้เล่นครอบครองตัวละครระดับ LYTH อยู่แล้ว (ไม่ว่าจะได้จาก Sub Summon หรือที่ใด):
+    -- ไม่ต้องสุ่มหา Lyth อีกต่อไป! ทำเพียงแค่ auto unlock ช่อง (ถ้าเงินพอ) แล้วสวมใส่ตัว Lyth ทันที!
+    local hasLyth, lythChar = hasAnyLythCharacter()
+    local s1CharInit, s1RarInit = getSlotCharacterInfo(1)
+    if hasLyth or isLythTier(s1RarInit, s1CharInit) then
+        if lobbyPkts and lobbyPkts.unlockCharacterSlot then
+            for slot = 2, 4 do
+                local _, _, isUnl = getSlotCharacterInfo(slot)
+                if not isUnl then
+                    local cost = getSlotUnlockCost(slot)
+                    if getCurrency("money") >= cost then
+                        setTask(string.format("🔓 ปลดล็อค Character Slot %d (ใช้ $%d)...", slot, cost))
+                        pcall(function() lobbyPkts.unlockCharacterSlot:fire({ slot = slot, requestId = nextId() }) end)
+                        task.wait(0.35)
+                    end
+                end
+            end
+        end
+        local bestLyth = lythChar or (isLythTier(s1RarInit, s1CharInit) and s1CharInit) or getOwnedLythCharacter()
+        if bestLyth then
+            autoEquipCharacterIfOwned(bestLyth)
+        end
+        return true
+    end
 
     local slot1Char, slot1Rarity, slot1Unlocked = getSlotCharacterInfo(1)
     local slot2Char, slot2Rarity, slot2Unlocked = getSlotCharacterInfo(2)
 
     -- 1. ตรวจสอบ Slot 1 (Sub Summon): สุ่มหาตัวที่กำหนด (เช่น "Dragon Eclipse") หรือระดับ Mythical - Lyth
     local targetSub = getTargetSubSummonName()
-    if not isSlot1Satisfied(slot1Char, slot1Rarity) then
+    if isSlot1Satisfied(slot1Char, slot1Rarity) then
+        local dName = getCharacterDisplayName(slot1Char)
+        -- ตัวละคร Slot 1 พอใจแล้ว (เป็น Mythic ขึ้นไป หรือตัวที่ตั้งค่าไว้) เก็บไว้ฟาร์มเงินทันที
+    else
+        -- ยืนยันข้อมูลอีก 0.5 วินาที เพื่อให้แน่ใจว่าไม่ได้เช็คเร็วเกินไปจนสุ่มทับตัวเดิม
+        task.wait(0.5)
+        local recheckChar, recheckRarity = getSlotCharacterInfo(1)
+        if isSlot1Satisfied(recheckChar, recheckRarity) then
+            return true
+        end
+
         while true do
             if isMatch then break end
             local s1Char, s1Rarity = getSlotCharacterInfo(1)
             if isSlot1Satisfied(s1Char, s1Rarity) then
-                setTask(string.format("✨ Slot 1 สุ่มได้ [%s] สำเร็จ — เก็บไว้ทันที!", (targetSub or s1Char):upper()))
-                task.wait(0.4)
+                local dName = getCharacterDisplayName(s1Char)
+                setTask(string.format("✨ Slot 1 ได้ตัวระดับ [%s] (%s) แล้ว — ล็อคเก็บไว้ฟาร์มเงินทันที!", tostring(s1Rarity):upper(), dName:upper()))
+                task.wait(0.5)
                 break
             end
+
             local curr, balance = getRollCurrencyAvailable()
             if not curr then
-                local req = targetSub and string.format("สุ่มหา %s", targetSub:upper()) or "Slot 1"
+                local req = targetSub and string.format("สุ่มหา %s", targetSub:upper()) or "Slot 1 (Mythic-Lyth)"
                 setTask(string.format("⚠️ โรลและเงินสำหรับ %s หมดแล้ว — ต้องไปฟาร์มด่าน 1 [NIGHTMARE] หาเงิน...", req))
                 return false
             end
+
             local goalDesc = targetSub and string.format("หาตัว [%s]", targetSub:upper()) or "ให้ถึงระดับ Mythic-Lyth"
             setTask(string.format("🎰 สุ่ม Slot 1 %s (%s เหลือ %d)...", goalDesc, curr:upper(), balance))
+
+            _lastRolledResult = nil
+            local prevChar = s1Char
+
             pcall(function()
                 lobbyPkts.rollCharacter:fire({
                     spinType = "Normal",
@@ -994,7 +1557,48 @@ local function autoSummonSlotsManager()
                     requestId = nextId()
                 })
             end)
-            task.wait(0.3)
+
+            -- ★ ป้องกันการสุ่มทับ: รอผลลัพธ์จากเซิร์ฟเวอร์แบบ Realtime ป้องกันการสุ่มเบิ้ลเด็ดขาด ★
+            local waitStart = tick()
+            local rolledSuccess = false
+            while tick() - waitStart < 2.5 do
+                task.wait(0.1)
+
+                -- ก. เช็คจาก Remote Event packet ของเซิร์ฟเวอร์
+                if _lastRolledResult and _lastRolledResult.slot == 1 then
+                    local rChar = _lastRolledResult.character
+                    local rRarity = _lastRolledResult.rarity
+                    if isSlot1Satisfied(rChar, rRarity) or isMythicOrHigher(rRarity, rChar) then
+                        local dName = getCharacterDisplayName(rChar)
+                        setTask(string.format("✨ [สุ่มได้] Slot 1 ได้ระดับ [%s] (%s) — หยุดสุ่มทันที!", tostring(rRarity):upper(), dName:upper()))
+                        task.wait(1.2)
+                        rolledSuccess = true
+                        break
+                    else
+                        break
+                    end
+                end
+
+                -- ข. เช็คจาก State ของสล็อต
+                local checkChar, checkRarity = getSlotCharacterInfo(1)
+                if checkChar and checkChar ~= "" and checkChar ~= prevChar then
+                    if isSlot1Satisfied(checkChar, checkRarity) or isMythicOrHigher(checkRarity, checkChar) then
+                        local dName = getCharacterDisplayName(checkChar)
+                        setTask(string.format("✨ [สล็อตอัปเดต] Slot 1 ได้ [%s] (%s) — หยุดสุ่มทันที!", tostring(checkRarity):upper(), dName:upper()))
+                        task.wait(1.0)
+                        rolledSuccess = true
+                        break
+                    else
+                        break
+                    end
+                end
+            end
+
+            if rolledSuccess then
+                break
+            end
+
+            task.wait(0.35)
         end
     end
 
@@ -1012,22 +1616,20 @@ local function autoSummonSlotsManager()
             local _, _, nowUnlocked = getSlotCharacterInfo(2)
             if not nowUnlocked then
                 setTask(string.format("💰 เงินไม่พอหรือยังปลดล็อคไม่สำเร็จ (%d/%d) — เตรียมเข้าด่าน 1 [NIGHTMARE] หาเงิน...", m, slot2Cost))
-                return false -- ยังไม่ปลดล็อค ออกไปให้ระบบพาเข้าฟาร์มด่าน 1
+                return false
             end
             freshSlot2Unlocked = true
         else
             setTask(string.format("💰 เงินไม่พอปลดล็อค Slot 2 (%d/%d) — เตรียมเข้าด่าน 1 [NIGHTMARE] หาเงิน...", m, slot2Cost))
-            return false -- เงินไม่พอ ออกไปให้ระบบพาเข้าฟาร์มด่าน 1
+            return false
         end
     end
 
-    -- ตรวจสอบเด็ดขาด: ถ้า Slot 2 ยังไม่ปลดล็อค ห้ามวนลูปสุ่มเด็ดขาด!
     if not freshSlot2Unlocked then
         return false
     end
 
     -- 3. สุ่มช่อง 2 จนกว่าจะได้ระดับ LYTH (Zenless / Miyabi) เท่านั้น!
-    -- วนลูปสุ่มสดใน Lobby ต่อเนื่องจนกว่าจะได้ตัวระดับ LYTH หรือเงิน/โรลหมด ห้ามข้ามไปทำขั้นตอนอื่นเด็ดขาด!
     while true do
         if isMatch then break end
         local cur2Char, cur2Rarity, cur2Unlocked = getSlotCharacterInfo(2)
@@ -1037,7 +1639,6 @@ local function autoSummonSlotsManager()
                 lobbyPkts.equipCharacterSlot:fire({ slot = 2, gameSlot = 1, requestId = nextId() })
             end)
             task.wait(0.5)
-            -- ★ อัปเกรด Skill Tree ทันทีสำหรับตัว LYTH ใหม่ที่เวล 1 (Damage -> Crit -> Def -> Spd) ★
             if upgradeActiveSkillsIfPointsAvailable then
                 pcall(function() upgradeActiveSkillsIfPointsAvailable(cur2Char) end)
             end
@@ -1046,11 +1647,15 @@ local function autoSummonSlotsManager()
 
         local curr, balance = getRollCurrencyAvailable()
         if not curr then
-            setTask("⚠️ เงินและโรลสำหรับสุ่ม Slot 2 หมดแล้ว — เตรียมเข้าด่าน 1 [NIGHTMARE] หาเงิน...")
+            setTask("⚠️ เงินและโรลสำหรับสุ่ม Slot 2 หมดแล้ว — สลับกลับ Slot 1 แล้วเตรียมเข้าด่าน 1 [NIGHTMARE] หาเงิน...")
+            pcall(ensureSlot1Equipped)
             return false
         end
 
         setTask(string.format("🎰 สุ่ม Slot 2 ใน Lobby หาตัวระดับ LYTH (%s เหลือ %d)...", curr:upper(), balance))
+        _lastRolledResult = nil
+        local prev2Char = cur2Char
+
         pcall(function()
             lobbyPkts.rollCharacter:fire({
                 spinType = "Normal",
@@ -1059,8 +1664,72 @@ local function autoSummonSlotsManager()
                 requestId = nextId()
             })
         end)
-        task.wait(0.3)
+
+        local waitStart2 = tick()
+        local rolled2Success = false
+        while tick() - waitStart2 < 2.5 do
+            task.wait(0.1)
+            if _lastRolledResult and _lastRolledResult.slot == 2 then
+                local rChar = _lastRolledResult.character
+                local rRarity = _lastRolledResult.rarity
+                if isLythTier(rRarity, rChar) then
+                    setTask(string.format("✨ [สุ่มได้] Slot 2 ได้ระดับ LYTH [%s] — หยุดสุ่มทันที!", tostring(rChar):upper()))
+                    task.wait(1.2)
+                    rolled2Success = true
+                    break
+                else
+                    break
+                end
+            end
+            local check2Char, check2Rarity = getSlotCharacterInfo(2)
+            if check2Char and check2Char ~= "" and check2Char ~= prev2Char then
+                if isLythTier(check2Rarity, check2Char) then
+                    setTask(string.format("✨ [สล็อตอัปเดต] Slot 2 ได้ระดับ LYTH [%s] — หยุดสุ่มทันที!", tostring(check2Char):upper()))
+                    task.wait(1.0)
+                    rolled2Success = true
+                    break
+                else
+                    break
+                end
+            end
+        end
+
+        if rolled2Success then
+            pcall(function()
+                lobbyPkts.equipCharacterSlot:fire({ slot = 2, gameSlot = 1, requestId = nextId() })
+            end)
+            task.wait(0.5)
+            local final2Char = select(1, getSlotCharacterInfo(2))
+            if upgradeActiveSkillsIfPointsAvailable and final2Char then
+                pcall(function() upgradeActiveSkillsIfPointsAvailable(final2Char) end)
+            end
+            return true
+        end
+
+        task.wait(0.35)
     end
+
+    return true
+end
+
+local function isSummonProgressionComplete()
+    if not (getgenv().AZ_Config and getgenv().AZ_Config.AutoSummon) then return true end
+
+    -- 1. ★ ถ้ามีตัวละครระดับ LYTH อยู่แล้ว (ไม่ว่าจะได้จาก Slot 1 Sub Summon, Slot 2, หรือที่ใดก็ตาม)
+    --    ถือว่าระบบ Summon Progression สำเร็จสมบูรณ์ 100%! ไม่ต้องสุ่มหา Lyth เพิ่มอีก
+    local hasLyth, lythChar = hasAnyLythCharacter()
+    if hasLyth then return true end
+
+    local slot1Char, slot1Rarity = getSlotCharacterInfo(1)
+    if isLythTier(slot1Rarity, slot1Char) then return true end
+
+    -- 2. ถ้ายังไม่มี Lyth เลย: ตรวจสอบ Slot 1 ก่อนว่าได้ตัวพึงพอใจหรือยัง (Mythic-Lyth)
+    if not isSlot1Satisfied(slot1Char, slot1Rarity) then return false end
+
+    -- 3. ถ้า Slot 1 ผ่านแล้ว แต่ยังไม่มี Lyth: ต้องปลดล็อค Slot 2 และสุ่ม Slot 2 จนกว่าจะได้ Lyth
+    local slot2Char, slot2Rarity, slot2Unlocked = getSlotCharacterInfo(2)
+    if not slot2Unlocked then return false end
+    if not isLythTier(slot2Rarity, slot2Char) then return false end
 
     return true
 end
@@ -1097,52 +1766,60 @@ local function getStrategicStageInfo()
     -- --------------------------------------------------
     -- 1. ปลดล็อค Story โหมด: ส่ง Delivery Quests ให้ครบ 50/50 เควสต์ก่อนอันดับแรก!
     -- --------------------------------------------------
-    if not isDeliveryCapped and currentDeliveryCount < currentDeliveryLimit and currentDeliveryLimit > 0 then
-        return "Delivery", "Lobby", 0, 4, string.format("📦 [STEP 1] วาร์ปส่ง Delivery Quests (%d/%d) ปลดล็อค Story โหมด...", currentDeliveryCount, currentDeliveryLimit)
+    if getgenv().AZ_Config and getgenv().AZ_Config.AutoDelivery50 == true then
+        if not isDeliveryCapped and currentDeliveryCount < currentDeliveryLimit and currentDeliveryLimit > 0 then
+            return "Delivery", "Lobby", 0, 4, string.format("📦 [STEP 1] วาร์ปส่ง Delivery Quests (%d/%d) ปลดล็อค Story โหมด...", currentDeliveryCount, currentDeliveryLimit)
+        end
     end
 
     -- --------------------------------------------------
     -- 2. SUMMON & SLOT 2 LYTH PROGRESSION FLOW:
-    --    ★ ต้องสุ่มให้เสร็จก่อน 100% ห้ามข้ามไปทำ Awakening หรือขั้นตอนอื่นเด็ดขาด! ★
+    --    ★ ถ้ามีตัวระดับ LYTH แล้ว ข้ามไปขั้นตอนถัดไปทันที 100% ไม่ต้องสุ่มหา Lyth อีก! ★
     -- --------------------------------------------------
     if getgenv().AZ_Config and getgenv().AZ_Config.AutoSummon then
+        if not isSlotDataStable() then
+            return nil, nil, 0, 4, "⏳ กำลังรอโหลดข้อมูลตัวละครในสล็อต..."
+        end
+
+        local hasLyth, lythChar = hasAnyLythCharacter()
         local slot1Char, slot1Rarity = getSlotCharacterInfo(1)
-        local slot2Char, slot2Rarity, slot2Unlocked = getSlotCharacterInfo(2)
-        local curr, balance = getRollCurrencyAvailable()
 
-        -- 2.1 ช่อง 1 (Sub Summon): ต้องได้ตัวที่กำหนด (เช่น "Dragon Eclipse") หรืออย่างน้อย Mythical - Lyth
-        if not isSlot1Satisfied(slot1Char, slot1Rarity) then
-            local targetSub = getTargetSubSummonName()
-            local goalDesc = targetSub and string.format("หาตัว [%s]", targetSub:upper()) or "ให้ถึงระดับ Mythic-Lyth"
-            if curr then
-                return "Summon", "Lobby", 0, 4, string.format("🎰 [STEP 2] สุ่ม Slot 1 ใน Lobby %s (%s เหลือ %d)...", goalDesc, curr:upper(), balance)
-            else
-                local req = targetSub and string.format("สุ่มหา %s", targetSub:upper()) or "สุ่ม Slot 1"
-                return "Story", "Hxh", 1, 4, string.format("💰 [STEP 2] โรล/เงินหมด — ฟาร์มด่าน 1 [NIGHTMARE] หาเงิน%s...", req)
+        -- ถ้ายังไม่มีตัวระดับ LYTH เลย: ดำเนินการตามลำดับ Sub Summon -> ปลดล็อค Slot 2 -> สุ่ม Slot 2 หา LYTH
+        if not hasLyth and not isLythTier(slot1Rarity, slot1Char) then
+            local curr, balance = getRollCurrencyAvailable()
+
+            -- 2.1 ช่อง 1 (Sub Summon): ต้องได้ตัวที่กำหนด (เช่น "Dragon Eclipse") หรืออย่างน้อย Mythical - Lyth
+            if not isSlot1Satisfied(slot1Char, slot1Rarity) then
+                local targetSub = getTargetSubSummonName()
+                local goalDesc = targetSub and string.format("หาตัว [%s]", targetSub:upper()) or "ให้ถึงระดับ Mythic-Lyth"
+                if curr then
+                    return "Summon", "Lobby", 0, 4, string.format("🎰 [STEP 2] สุ่ม Slot 1 ใน Lobby %s (%s เหลือ %d)...", goalDesc, curr:upper(), balance)
+                else
+                    local req = targetSub and string.format("สุ่มหา %s", targetSub:upper()) or "สุ่ม Slot 1"
+                    return "Story", "Hxh", 1, 4, string.format("💰 [STEP 2] โรล/เงินหมด — ฟาร์มด่าน 1 [NIGHTMARE] หาเงิน%s...", req)
+                end
             end
-        end
 
-        -- 2.2 ช่อง 2: ต้องปลดล็อคช่อง 2 ก่อนอันดับแรก! (ราคา $25K)
-        if not slot2Unlocked then
-            local m = getCurrency("money")
-            local slot2Cost = getSlotUnlockCost(2)
-            if m < slot2Cost then
-                return "Story", "Hxh", 1, 4, string.format("💰 [STEP 2] ฟาร์มด่าน 1 [NIGHTMARE] หาเงินปลดล็อค Slot 2 (%d/%d)...", m, slot2Cost)
-            else
-                -- มีเงินพอแล้ว ให้ไปเรียก autoSummonSlotsManager ปลดล็อคใน Lobby ทันที
-                return "Summon", "Lobby", 0, 4, string.format("🔓 [STEP 2] มีเงินครบ $%d แล้ว — ปลดล็อค Slot 2 ใน Lobby...", slot2Cost)
+            -- 2.2 ช่อง 2: ต้องปลดล็อคช่อง 2 ก่อนอันดับแรก! (ราคา $25K)
+            local slot2Char, slot2Rarity, slot2Unlocked = getSlotCharacterInfo(2)
+            if not slot2Unlocked then
+                local m = getCurrency("money")
+                local slot2Cost = getSlotUnlockCost(2)
+                if m < slot2Cost then
+                    return "Story", "Hxh", 1, 4, string.format("💰 [STEP 2] ฟาร์มด่าน 1 [NIGHTMARE] หาเงินปลดล็อค Slot 2 (%d/%d)...", m, slot2Cost)
+                else
+                    -- มีเงินพอแล้ว ให้ไปเรียก autoSummonSlotsManager ปลดล็อคใน Lobby ทันที
+                    return "Summon", "Lobby", 0, 4, string.format("🔓 [STEP 2] มีเงินครบ $%d แล้ว — ปลดล็อค Slot 2 ใน Lobby...", slot2Cost)
+                end
             end
-        end
 
-        -- 2.3 ช่อง 2: เมื่อปลดล็อคแล้ว สุ่มจนกว่าจะได้ระดับ LYTH (Zenless / Miyabi) เท่านั้น!
-        -- ถ้ายังไม่ได้ระดับ LYTH:
-        if not isLythTier(slot2Rarity, slot2Char) then
-            if curr then
-                -- ถ้ามีเงินหรือโรล: ให้นั่งสุ่มใน Lobby รัวๆ ทันที ห้ามเข้าด่านเด็ดขาด!
-                return "Summon", "Lobby", 0, 4, string.format("🎰 [STEP 2] สุ่ม Slot 2 ใน Lobby หาตัวระดับ LYTH เท่านั้น (%s เหลือ %d)...", curr:upper(), balance)
-            else
-                -- ถ้าเงินและโรลหมด: ถึงจะเข้าไปฟาร์มด่านแรก HxH Ch.1 [NIGHTMARE] หาเงิน
-                return "Story", "Hxh", 1, 4, "💰 [STEP 2] โรล/เงินหมด — ฟาร์มด่าน 1 [NIGHTMARE] หาเงินมาสุ่ม Slot 2 ต่อ..."
+            -- 2.3 ช่อง 2: เมื่อปลดล็อคแล้ว สุ่มจนกว่าจะได้ระดับ LYTH (Zenless / Miyabi) เท่านั้น!
+            if not isLythTier(slot2Rarity, slot2Char) then
+                if curr then
+                    return "Summon", "Lobby", 0, 4, string.format("🎰 [STEP 2] สุ่ม Slot 2 ใน Lobby หาตัวระดับ LYTH เท่านั้น (%s เหลือ %d)...", curr:upper(), balance)
+                else
+                    return "Story", "Hxh", 1, 4, "💰 [STEP 2] โรล/เงินหมด — ฟาร์มด่าน 1 [NIGHTMARE] หาเงินมาสุ่ม Slot 2 ต่อ..."
+                end
             end
         end
     end
@@ -1201,28 +1878,30 @@ local function getStrategicStageInfo()
     end
 
     -- --------------------------------------------------
-    -- 5. AUTO RAID ฟาร์มหาตัวละคร EXCLUSIVE (LYTH) เช่น FLAME DIRECTOR [NIGHTMARE]
-    --    หาตัวละคร Exclusive จาก Raid Bathtub
-    --    เมื่อได้มา: สลับใส่ช่อง 1 (ถ้าช่อง 1 เป็น Lyth แล้ว ให้ใส่ช่อง 2 แทน) + Awakening ตัว Lyth
+    -- 5. AUTO RAID ล่าตัวละคร EXCLUSIVE (LYTH): FLAME DIRECTOR (HU TAO) [NIGHTMARE]
+    --    - ฟาร์ม Raid Bathtub จนกว่าจะได้ Flame Director (Hu Tao) เข้าตัว 100%
+    --    - เมื่อได้มา: นำใส่ช่องที่ไม่มีตัวระดับ Lyth อยู่ (ห้ามทับ Lyth ตรง Summon เด็ดขาด!)
+    --    - สลับมาช่วยฟาร์มของและ Awakening ให้ Flame Director (Hu Tao) ต่อจนเสร็จ
     -- --------------------------------------------------
-    local ownedLyth = getOwnedLythCharacter()
-    if not ownedLyth then
-        return "Raid", "BathTub", 1, 4, "🔥 [STEP 5] ฟาร์ม Raid [NIGHTMARE] หา Exclusive (Flame Director / Lyth)..."
+    if not hasFlameDirector() then
+        return "Raid", "BathTub", 1, 4, "🔥 [STEP 5] ฟาร์ม Raid Bathtub [NIGHTMARE] ล่า Flame Director (Hu Tao)..."
     else
-        -- ตรวจสอบการสวมใส่ Exclusive Lyth ลง Slot
-        local slot1Char, slot1Rarity = getSlotCharacterInfo(1)
-        if not isLythTier(slot1Rarity, slot1Char) then
-            pcall(function() lobbyPkts.equipCharacterSlot:fire({ slot = 1, gameSlot = 1, requestId = nextId() }) end)
-        else
-            pcall(function() lobbyPkts.equipCharacterSlot:fire({ slot = 2, gameSlot = 1, requestId = nextId() }) end)
-        end
+        -- ตรวจสอบและนำ Hu Tao เข้าช่องที่ไม่ทับ Summon Lyth
+        pcall(placeHuTaoInNonSummonSlot)
 
-        -- ถ้าตัว Lyth ยังไม่ได้ Awakening ให้ตรวจสอบและฟาร์มของ Awakening ตัว Lyth
-        if not isCharacterAwakened(ownedLyth) then
-            local missingMat = getMissingAwakeningMaterials(ownedLyth)
+        -- ถ้า Hu Tao ยังไม่ได้ Awakening ให้สวมใส่ Hu Tao และพาไปฟาร์มของ Awakening
+        if not isCharacterAwakened("hutao") then
+            autoEquipCharacterIfOwned("hutao")
+            local missingMat = getMissingAwakeningMaterials("hutao")
             for mId, needAmt in pairs(missingMat) do
                 local gm, map, ch, diff = getStageForMaterial(mId)
-                return gm, map, ch, 4, string.format("⚡ [STEP 5] ฟาร์ม Mat #%s (ขาด %d ชิ้น) เพื่อ Awakening ตัว Lyth: %s [NIGHTMARE]", mId, needAmt, ownedLyth:upper())
+                return gm, map, ch, 4, string.format("⚡ [STEP 5] ฟาร์ม Mat #%s (ขาด %d ชิ้น) เพื่อ Awakening FLAME DIRECTOR (HUTAO) [NIGHTMARE]", mId, needAmt)
+            end
+        else
+            -- Awakening Hu Tao เสร็จสมบูรณ์แล้ว! สลับกลับมาใช้ตัว Summon Lyth (เช่น Miyabi) ทันที
+            local _, summonLyth = getSummonLythInfo()
+            if summonLyth then
+                autoEquipCharacterIfOwned(summonLyth)
             end
         end
     end
@@ -1274,9 +1953,28 @@ local getHighestUnlockedStageInfo = getStrategicStageInfo
 if lp and lp.Idled then
     table.insert(_G.AZ_Connections, lp.Idled:Connect(function()
         pcall(function()
-            VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-            task.wait(0.5)
-            VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            if isMobileDevice then
+                -- เฉพาะ Mobile: CaptureController และจำลอง Touch Event
+                if VirtualUser then
+                    pcall(function() VirtualUser:CaptureController() end)
+                    pcall(function() VirtualUser:ClickButton2(Vector2.new(0, 0)) end)
+                end
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    pcall(function()
+                        vim:SendTouchEvent(1, 0, 10, 10)
+                        task.wait(0.05)
+                        vim:SendTouchEvent(1, 2, 10, 10)
+                    end)
+                end
+            else
+                -- เฉพาะ PC: จำลอง MouseButton2
+                if VirtualUser then
+                    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+                    task.wait(0.2)
+                    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+                end
+            end
         end)
     end))
 end
@@ -1288,6 +1986,9 @@ table.insert(_G.AZ_Connections, RunService.Heartbeat:Connect(function()
         lastAntiAFK = tick()
         if lobbyPkts and lobbyPkts.enterAfk then
             pcall(function() lobbyPkts.enterAfk:fire() end)
+        end
+        if RS:FindFirstChild("EnterAfk") then
+            pcall(function() RS.EnterAfk:FireServer() end)
         end
     end
 end))
@@ -1508,18 +2209,20 @@ Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 7)
 local minStroke = Instance.new("UIStroke", MinBtn)
 minStroke.Color = Color3.fromRGB(180, 80, 255); minStroke.Thickness = 1; minStroke.Transparency = 0.4
 
--- Dragging
+-- Dragging (รองรับทั้ง Mobile Touch และ PC Mouse)
 local isDragging, dragStartPos, frameStartPos = false, nil, nil
 Header.InputBegan:Connect(function(inp)
-    if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
         isDragging = true; dragStartPos = inp.Position; frameStartPos = HUD.Position
     end
 end)
 Header.InputEnded:Connect(function(inp)
-    if inp.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = false end
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+        isDragging = false
+    end
 end)
 UserInputService.InputChanged:Connect(function(inp)
-    if isDragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+    if isDragging and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
         local delta = inp.Position - dragStartPos
         HUD.Position = UDim2.new(frameStartPos.X.Scale, frameStartPos.X.Offset + delta.X,
                                  frameStartPos.Y.Scale, frameStartPos.Y.Offset + delta.Y)
@@ -1527,11 +2230,13 @@ UserInputService.InputChanged:Connect(function(inp)
 end)
 
 local isMinimized = false
-MinBtn.MouseButton1Click:Connect(function()
+local function toggleMinimize()
     isMinimized = not isMinimized
     HUD.Size = isMinimized and UDim2.new(0, 320, 0, 48) or UDim2.new(0, 320, 0, 290)
     MinBtn.Text = isMinimized and "+" or "—"
-end)
+end
+MinBtn.Activated:Connect(toggleMinimize)
+MinBtn.MouseButton1Click:Connect(toggleMinimize)
 
 local StatusContainer = Instance.new("Frame")
 StatusContainer.Size = UDim2.new(1, -16, 1, -56); StatusContainer.Position = UDim2.new(0, 8, 0, 52)
@@ -1853,10 +2558,17 @@ end
 local isEnteringStage = false
 
 local function enterHighestUnlockedStage()
+    lobbyPkts = getLobbyPackets()
     if isMatch or not lobbyPkts or isEnteringStage then return end
     isEnteringStage = true
 
     local gamemode, mapName, chapterNum, diffNum, customTask = getStrategicStageInfo()
+
+    if not gamemode or not mapName then
+        if customTask then setTask(customTask) end
+        isEnteringStage = false
+        return
+    end
 
     -- ★ ถ้าเป็น STEP 1 Delivery Quest ให้รันวาร์ปส่งเควสต์ให้ครบก่อน ไม่ต้องเข้า Capsule ★
     if gamemode == "Delivery" then
@@ -1940,14 +2652,14 @@ local function enterHighestUnlockedStage()
 
             local bathTubPart = content and content:FindFirstChild("MapsList", true) and content.MapsList:FindFirstChild("BathTub", true)
             local bathBtn = bathTubPart and bathTubPart:FindFirstChildWhichIsA("GuiButton", true)
-            if bathBtn and firesignal then firesignal(bathBtn.Activated) end
+            if bathBtn then clickGuiElementSafely(bathBtn) end
 
             local nmPart = content and content:FindFirstChild("Difficulty", true) and content.Difficulty:FindFirstChild("Nightmare", true)
             local nmBtn = nmPart and (nmPart:FindFirstChildWhichIsA("GuiButton", true) or nmPart:FindFirstChild("SeletButton", true))
-            if nmBtn and firesignal then firesignal(nmBtn.Activated) end
+            if nmBtn then clickGuiElementSafely(nmBtn) end
 
             local startBtn = content and content:FindFirstChild("StaerButton", true)
-            if startBtn and firesignal then firesignal(startBtn.Activated) end
+            if startBtn then clickGuiElementSafely(startBtn) end
         end
     end)
 
@@ -1983,7 +2695,7 @@ local function enterHighestUnlockedStage()
             if quque and quque.MainFrame and quque.MainFrame.Visible then
                 local mf = quque.MainFrame
                 local startBtn = mf:FindFirstChild("StaerButton", true)
-                if startBtn and firesignal then firesignal(startBtn.Activated) end
+                if startBtn then clickGuiElementSafely(startBtn) end
             end
         end)
 
@@ -2078,31 +2790,7 @@ end
 local matchStartTime = tick()
 local matchEndSeenTime = 0
 
--- ฟังก์ชันคลิกปุ่ม UI อย่างแน่นอน (รองรับ firesignal, VirtualInputManager และ click events)
-local function clickGuiElementSafely(elem)
-    if not elem then return end
-    pcall(function()
-        if firesignal and elem:IsA("GuiButton") then
-            firesignal(elem.Activated)
-            firesignal(elem.MouseButton1Click)
-            firesignal(elem.MouseButton1Down)
-            task.wait(0.02)
-            firesignal(elem.MouseButton1Up)
-        end
-    end)
-    pcall(function()
-        local vim = game:GetService("VirtualInputManager")
-        if vim and elem:IsA("GuiObject") then
-            local pos = elem.AbsolutePosition
-            local size = elem.AbsoluteSize
-            local cx = pos.X + size.X / 2
-            local cy = pos.Y + size.Y / 2
-            vim:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
-            task.wait(0.03)
-            vim:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
-        end
-    end)
-end
+-- (clickGuiElementSafely ถูกประกาศไว้ที่ส่วนบนสุดเรียบร้อยแล้ว)
 
 -- ตรวจจับและกดปุ่ม Next / Continue อัตโนมัติเมื่อจบด่าน หรือกดออกกลับ Lobby ถ้าเคลียร์หมด/ไม่มีปุ่ม Next
 local function handleMatchEndAutoNext()
@@ -2164,13 +2852,15 @@ local function handleMatchEndAutoNext()
 
         if foundLeaveButton then
             pcall(function()
-                local vim = game:GetService("VirtualInputManager")
-                if vim then
-                    vim:SendKeyEvent(true, Enum.KeyCode.L, false, game)
-                    task.wait(0.04)
-                    vim:SendKeyEvent(false, Enum.KeyCode.L, false, game)
+                if not isMobileDevice then
+                    local vim = game:GetService("VirtualInputManager")
+                    if vim then
+                        vim:SendKeyEvent(true, Enum.KeyCode.L, false, game)
+                        task.wait(0.04)
+                        vim:SendKeyEvent(false, Enum.KeyCode.L, false, game)
+                    end
+                    VirtualUser:TypeKey("l")
                 end
-                VirtualUser:TypeKey("l")
                 local runPkts = RS:FindFirstChild("game") and RS.game:FindFirstChild("packets") and RS.game.packets:FindFirstChild("runPackets") and require(RS.game.packets.runPackets)
                 if runPkts and runPkts.voteResult then
                     runPkts.voteResult:fire("leave")
@@ -2188,6 +2878,7 @@ local function handleMatchEndAutoNext()
 
         -- ★ เมื่อจบด่านทุกโหมด (Story & Raid): กด Leave ออกกลับมา Lobby ทันทีเพื่อตรวจของคราฟและสวมใส่ ★
         if leaveBox and leaveBox.Visible then
+            hasWarpedToBossArea = false
             if matchEndSeenTime == 0 then matchEndSeenTime = tick() end
             local leaveClickable = leaveBox:FindFirstChild("Button") or leaveBox:FindFirstChildWhichIsA("GuiButton") or leaveBox
             clickGuiElementSafely(leaveClickable)
@@ -2234,7 +2925,8 @@ local function isSkillReady(sNum)
             if box:IsA("GuiObject") then
                 local kb = box:FindFirstChild("keybind")
                 local kbTxt = kb and kb:FindFirstChild("Txt") and kb.Txt.Text
-                if kbTxt == tostring(sNum) then
+                local isMatchBox = (kbTxt == tostring(sNum)) or (box.Name == tostring(sNum)) or (box.Name:lower():find("skill" .. tostring(sNum))) or (box.LayoutOrder == sNum)
+                if isMatchBox then
                     for _, cd in ipairs({box:FindFirstChild("cd"), box:FindFirstChild("Frame") and box.Frame:FindFirstChild("cd")}) do
                         if cd and cd.Visible then
                             local txt = cd:FindFirstChild("Txt") and cd.Txt.Text
@@ -2306,6 +2998,7 @@ local function countAliveEnemies()
 end
 
 local currentMatchArea = 1
+local hasWarpedToBossArea = false
 local areaSpawnedEnemies = {}
 local wasTargetingRubble = false
 local lastBorderWaitSeen = {}
@@ -2321,6 +3014,22 @@ local function getMatchAreasFolder()
 end
 
 local function getCurrentMatchArea()
+    -- 1. ดึงจาก runStore โดยตรง (Game Engine State แม่นยำ 100% ไม่มีทางผิดพลาด)
+    local rStore = RS:FindFirstChild("game") and RS.game:FindFirstChild("stores") and RS.game.stores:FindFirstChild("runStore")
+    if rStore then
+        local ok, res = pcall(function()
+            local mod = require(rStore)
+            local st = mod.store and mod.store.state or mod.state
+            if st and st.area then
+                local a = (type(st.area) == "table" and st.area.current) or st.area
+                local aNum = tonumber(a)
+                if aNum and aNum > 0 then return aNum end
+            end
+        end)
+        if ok and res then return res end
+    end
+
+    -- 2. Fallback จาก PlayerGui (ตัด NextBoss ออกเด็ดขาด)
     local pg = lp and lp:FindFirstChild("PlayerGui")
     if pg then
         for _, gName in ipairs({"RoundHUD", "RunSide", "HUD"}) do
@@ -2328,31 +3037,19 @@ local function getCurrentMatchArea()
             if g then
                 for _, d in ipairs(g:GetDescendants()) do
                     if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
-                        local txt = d.Text
-                        -- 1. ตรวจจับเลข Area ภาษาอังกฤษ
-                        if not txt:lower():find("next boss") then
-                            local aMatch = txt:match("[Aa]rea%s*(%d+)")
-                            if aMatch then
-                                local aNum = tonumber(aMatch)
-                                if aNum then return aNum end
-                            end
-                        end
-                        -- 2. ตรวจจับเลข Area ภาษาไทย (เช่น "พื้นที่ 5/5", "เขต 5")
-                        if not txt:find("บอสถัดไป") then
-                            local thMatch = txt:match("พื้นที่%s*(%d+)") or txt:match("เขต%s*(%d+)")
-                            if thMatch then
-                                local aNum = tonumber(thMatch)
-                                if aNum then return aNum end
-                            end
-                        end
-                        -- 3. ตรวจจับเศษส่วน Area ใน RoundHUD (เช่น "5/5" ใน "ฝันร้าย · พื้นที่ 5/5 · เหลือ 14")
-                        if not txt:lower():find("wave") and not txt:find("เวฟ") then
-                            local curA, maxA = txt:match("(%d+)%s*/%s*(%d+)")
-                            if curA and maxA then
-                                local cNum = tonumber(curA)
-                                local mNum = tonumber(maxA)
-                                if cNum and mNum and mNum >= 3 and cNum <= mNum then
-                                    return cNum
+                        local isNextBoss = d.Name:lower():find("nextboss") or (d.Parent and d.Parent.Name:lower():find("nextboss")) or (d.Parent and d.Parent.Parent and d.Parent.Parent.Name:lower():find("nextboss"))
+                        if not isNextBoss then
+                            local txt = d.Text
+                            if not txt:lower():find("next") and not txt:find("ถัดไป") then
+                                local aMatch = txt:match("[Aa]rea%s*(%d+)")
+                                if aMatch then
+                                    local aNum = tonumber(aMatch)
+                                    if aNum then return aNum end
+                                end
+                                local thMatch = txt:match("พื้นที่%s*(%d+)") or txt:match("เขต%s*(%d+)")
+                                if thMatch then
+                                    local aNum = tonumber(thMatch)
+                                    if aNum then return aNum end
                                 end
                             end
                         end
@@ -2397,7 +3094,30 @@ local function getAreaCenterPosition(areaNum)
 end
 
 -- ตรวจสอบสถานะและจำนวน Wave ในด่านปัจจุบัน (เช่น Wave 1/2, Wave 2/2)
+local cachedWaveProgress = {}
 local function getCurrentWaveProgress()
+    -- 1. ดึงจาก runStore โดยตรง (Game Engine State)
+    local rStore = RS:FindFirstChild("game") and RS.game:FindFirstChild("stores") and RS.game.stores:FindFirstChild("runStore")
+    if rStore then
+        local ok, cW, mW = pcall(function()
+            local mod = require(rStore)
+            local st = mod.store and mod.store.state or mod.state
+            if st then
+                local w = (type(st.wave) == "table" and st.wave.current) or st.wave
+                local wc = (type(st.waveCount) == "table" and st.waveCount.current) or st.waveCount
+                local curW = tonumber(w) or 1
+                local maxW = tonumber(wc) or 1
+                return curW, maxW
+            end
+        end)
+        if ok and mW and mW > 0 then
+            cW = math.max(1, cW or 1)
+            cachedWaveProgress[currentMatchArea or 1] = { curW = cW, maxW = mW }
+            return cW, mW
+        end
+    end
+
+    -- 2. Fallback: ดึงจาก PlayerGui
     local pg = lp and lp:FindFirstChild("PlayerGui")
     if pg then
         for _, gName in ipairs({"RoundHUD", "RunSide", "HUD", "MobileHUD"}) do
@@ -2408,11 +3128,17 @@ local function getCurrentWaveProgress()
                         local txt = d.Text
                         local cw, mw = txt:match("[Ww]ave%s*(%d+)%s*/%s*(%d+)")
                         if cw and mw then
-                            return tonumber(cw) or 1, tonumber(mw) or 1
+                            local cNum = tonumber(cw) or 1
+                            local mNum = tonumber(mw) or 1
+                            cachedWaveProgress[currentMatchArea or 1] = { curW = cNum, maxW = mNum }
+                            return cNum, mNum
                         end
                         local cwTh, mwTh = txt:match("เวฟ%s*(%d+)%s*/%s*(%d+)")
                         if cwTh and mwTh then
-                            return tonumber(cwTh) or 1, tonumber(mwTh) or 1
+                            local cNum = tonumber(cwTh) or 1
+                            local mNum = tonumber(mwTh) or 1
+                            cachedWaveProgress[currentMatchArea or 1] = { curW = cNum, maxW = mNum }
+                            return cNum, mNum
                         end
                     end
                 end
@@ -2427,10 +3153,15 @@ local function getCurrentWaveProgress()
             end
         end
     end
+
+    local saved = cachedWaveProgress[currentMatchArea or 1]
+    if saved and saved.maxW and saved.maxW > 1 then
+        return saved.curW, saved.maxW
+    end
     return 1, 1
 end
 
--- ตรวจสอบว่าเกมขึ้นสถานะให้ทุบ Rubble / กำแพง หรือไม่
+-- ตรวจสอบว่าเกมขึ้นสถานะให้ทุบ Rubble / กำแพง หรือไม่ (เช็คจากข้อความ Break the rubble ชัดเจน 100%)
 local function isRubbleBreakPhase()
     local pg = lp and lp:FindFirstChild("PlayerGui")
     if pg then
@@ -2447,10 +3178,6 @@ local function isRubbleBreakPhase()
                 end
             end
         end
-        local rb = pg:FindFirstChild("RubbleBar") or pg:FindFirstChild("RubbleBossBar")
-        if rb and rb.Enabled then
-            return true
-        end
     end
     return false
 end
@@ -2462,20 +3189,26 @@ local function shouldTargetRubble()
         return false
     end
 
-    -- 2. ตรวจสอบสถานะ Wave ในปัจจุบัน
+    -- 2. ถ้าอยู่ใน Area 5/5 (บอส) ไม่มี Rubble ให้ตีเด็ดขาด!
+    local curAreaNum = getCurrentMatchArea()
+    if curAreaNum >= 5 then
+        return false
+    end
+
+    -- 3. ตรวจสอบสถานะ Wave ในปัจจุบัน
     local curW, maxW = getCurrentWaveProgress()
     -- ถ้ายังไม่จบทุกเวฟ (เช่น อยู่เวฟ 1/2 หรือ 1/3) แปลว่ามอนสเตอร์เวฟถัดไปกำลังจะเกิด ห้ามไปตี Rubble / กำแพง เด็ดขาด!
     if curW < maxW then
         return false
     end
 
-    -- 3. ถ้าเกมขึ้น UI บอกให้ทุบ Rubble ชัดเจน (Break the rubble)
+    -- 4. ถ้าเกมขึ้น UI บอกให้ทุบ Rubble ชัดเจน (Break the rubble)
     if isRubbleBreakPhase() then
         return true
     end
 
-    -- 4. ถ้าจบเวฟสุดท้ายแล้ว (curW >= maxW) และใน Area นี้เคยมีมอนสเตอร์เกิดแล้ว และตายหมดแล้ว
-    if curW >= maxW and areaSpawnedEnemies[currentMatchArea] then
+    -- 5. ถ้าจบเวฟสุดท้ายแล้ว (curW >= maxW) และใน Area นี้มอนสเตอร์ตายหมดแล้ว
+    if curW >= maxW and maxW > 0 and areaSpawnedEnemies[currentMatchArea] then
         return true
     end
 
@@ -2782,16 +3515,18 @@ local function handleRaidElevatorTransition(hrp)
                 end)
             end
 
-            -- จำลองกดปุ่ม E สำรอง (ทั้ง VirtualInputManager และ VirtualUser)
-            pcall(function()
-                local vim = game:GetService("VirtualInputManager")
-                if vim then
-                    vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                    task.wait(0.03)
-                    vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                end
-                VirtualUser:TypeKey("e")
-            end)
+            -- จำลองกดปุ่ม E สำรอง (เฉพาะ PC เท่านั้น — Mobile ใช้ Direct Prompt ไม่แตะ Keyboard)
+            if not isMobileDevice then
+                pcall(function()
+                    local vim = game:GetService("VirtualInputManager")
+                    if vim then
+                        vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                        task.wait(0.03)
+                        vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    end
+                    VirtualUser:TypeKey("e")
+                end)
+            end
         end
 
         return true
@@ -2822,8 +3557,8 @@ local function autoVoteNightmareAndReady()
         if diffGui and diffGui.Enabled then
             local nmFrame = diffGui:FindFirstChild("Nightmare", true)
             local selBtn = nmFrame and (nmFrame:FindFirstChild("SeletButton", true) or nmFrame:FindFirstChildWhichIsA("GuiButton", true))
-            if selBtn and firesignal then
-                firesignal(selBtn.Activated)
+            if selBtn then
+                clickGuiElementSafely(selBtn)
             end
         end
     end)
@@ -3046,9 +3781,14 @@ local function executeCombatCycle()
                 end
             end
             pcall(function()
-                VirtualUser:TypeKey("f")
-                task.wait(0.1)
-                VirtualUser:TypeKey("4")
+                local charCtrl = lp:FindFirstChild("PlayerScripts") and lp.PlayerScripts:FindFirstChild("game") and lp.PlayerScripts.game:FindFirstChild("controllers") and lp.PlayerScripts.game.controllers:FindFirstChild("characterController") and require(lp.PlayerScripts.game.controllers.characterController)
+                if charCtrl and charCtrl.performSkill then charCtrl.performSkill(4) end
+                if RS:FindFirstChild("performSkill") then RS.performSkill:FireServer(4) end
+                if not isMobileDevice then
+                    VirtualUser:TypeKey("f")
+                    task.wait(0.1)
+                    VirtualUser:TypeKey("4")
+                end
             end)
             return
         end
@@ -3072,9 +3812,14 @@ local function executeCombatCycle()
             end
         end
         pcall(function()
-            VirtualUser:TypeKey("f")
-            task.wait(0.1)
-            VirtualUser:TypeKey("4")
+            local charCtrl = lp:FindFirstChild("PlayerScripts") and lp.PlayerScripts:FindFirstChild("game") and lp.PlayerScripts.game:FindFirstChild("controllers") and lp.PlayerScripts.game.controllers:FindFirstChild("characterController") and require(lp.PlayerScripts.game.controllers.characterController)
+            if charCtrl and charCtrl.performSkill then charCtrl.performSkill(4) end
+            if RS:FindFirstChild("performSkill") then RS.performSkill:FireServer(4) end
+            if not isMobileDevice then
+                VirtualUser:TypeKey("f")
+                task.wait(0.1)
+                VirtualUser:TypeKey("4")
+            end
         end)
         return
     elseif hpRatio < 0.80 then
@@ -3108,31 +3853,40 @@ local function executeCombatCycle()
     vacuumNearbyCoins(75)
 
     -- ★ SPECIAL CHECK: AREA 5 / BOSS ROOM DIRECT WARP ★
-    -- ถ้าด่านปัจจุบันถึง Area 5/5 (หรือห้องบอส) ให้วาร์ปทะลุเข้าห้องบอสทันที ป้องกันการติดค้างอยู่ Area ก่อนหน้า!
+    -- ถ้าด่านปัจจุบันถึง Area 5/5 (หรือห้องบอส)
+    -- วาร์ปเข้าห้องบอสแน่นอนเพื่อเปิดทริกเกอร์/เสกบอส แต่ถ้าบอสหรือมอนสเตอร์เกิดแล้ว ให้ต่อสู้ได้เลย ไม่ต้องวาร์ปซ้ำ!
     local curAreaNum = getCurrentMatchArea()
     currentMatchArea = curAreaNum
     if curAreaNum >= 5 then
-        local area5Pos, area5Part = getAreaCenterPosition(5)
-        if area5Pos then
-            local distToArea5 = (hrp.Position - area5Pos).Magnitude
-            if distToArea5 > 25 then
-                cleanupFlight()
-                hrp.CFrame = CFrame.new(area5Pos)
-                if hrp.AssemblyLinearVelocity then
-                    hrp.AssemblyLinearVelocity = Vector3.zero
+        local existingTarget = findNearestEnemy()
+        if not existingTarget and not hasWarpedToBossArea then
+            local area5Pos, area5Part = getAreaCenterPosition(5)
+            if area5Pos then
+                local distToArea5 = (hrp.Position - area5Pos).Magnitude
+                if distToArea5 > 15 then
+                    cleanupFlight()
+                    hrp.CFrame = CFrame.new(area5Pos)
+                    if hrp.AssemblyLinearVelocity then
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                    end
+                    if area5Part and firetouchinterest then
+                        pcall(function()
+                            firetouchinterest(hrp, area5Part, 0)
+                            task.wait(0.02)
+                            firetouchinterest(hrp, area5Part, 1)
+                        end)
+                    end
+                    hasWarpedToBossArea = true
+                    setTask("⚡ ตรวจพบ Area 5/5 (บอส) — วาร์ปเข้าห้องบอสเปิดการต่อสู้!")
+                    task.wait(0.3)
+                    return
                 end
-                if area5Part and firetouchinterest then
-                    pcall(function()
-                        firetouchinterest(hrp, area5Part, 0)
-                        task.wait(0.02)
-                        firetouchinterest(hrp, area5Part, 1)
-                    end)
-                end
-                setTask("⚡ ตรวจพบ Area 5/5 (บอส) — วาร์ปเข้าห้องบอสทันที!")
-                task.wait(0.2)
-                return
             end
+        elseif existingTarget then
+            hasWarpedToBossArea = true
         end
+    else
+        hasWarpedToBossArea = false
     end
 
     -- ค้นหามอนสเตอร์
@@ -3330,8 +4084,10 @@ local function executeCombatCycle()
         elseif RS:FindFirstChild("performM1") then
             RS.performM1:FireServer()
         end
-        VirtualUser:Button1Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-        VirtualUser:Button1Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        if not isMobileDevice then
+            VirtualUser:Button1Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            VirtualUser:Button1Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        end
     end)
 
     -- 2. ★ ตรวจสอบและปล่อย Ultimate (G) กับบอส ปล่อยระหว่าง Orbit โดนบอสเต็มๆ ไม่ลงพื้น ★
@@ -3363,7 +4119,17 @@ local function executeCombatCycle()
             if RS:FindFirstChild("performSkill") then
                 RS.performSkill:FireServer(4)
             end
-            VirtualUser:TypeKey("g")
+            if isMobileDevice then
+                pcall(function()
+                    local pg = lp:FindFirstChild("PlayerGui")
+                    local hud = pg and pg:FindFirstChild("HUD")
+                    local ult = hud and hud:FindFirstChild("Ultimate", true)
+                    local ultBtn = ult and (ult:FindFirstChildWhichIsA("GuiButton") or (ult:IsA("GuiButton") and ult))
+                    if ultBtn then clickGuiElementSafely(ultBtn) end
+                end)
+            else
+                VirtualUser:TypeKey("g")
+            end
         end)
         setTask(string.format("💥 ปล่อยอัลติเมท (G) เล็งตรงเป้าหมาย: %s!", targetName))
     end
@@ -3408,7 +4174,23 @@ local function executeCombatCycle()
                 if RS:FindFirstChild("performSkill") then
                     RS.performSkill:FireServer(readySkill)
                 end
-                VirtualUser:TypeKey(tostring(readySkill))
+                if isMobileDevice then
+                    pcall(function()
+                        local pg = lp:FindFirstChild("PlayerGui")
+                        local hud = pg and pg:FindFirstChild("HUD")
+                        local skillsFrame = hud and hud:FindFirstChild("skills", true)
+                        if skillsFrame then
+                            for _, box in ipairs(skillsFrame:GetChildren()) do
+                                if box:IsA("GuiObject") and ((box.Name == tostring(readySkill)) or (box.LayoutOrder == readySkill) or box.Name:lower():find("skill" .. tostring(readySkill))) then
+                                    local btn = box:FindFirstChildWhichIsA("GuiButton") or (box:IsA("GuiButton") and box)
+                                    if btn then clickGuiElementSafely(btn) end
+                                end
+                            end
+                        end
+                    end)
+                else
+                    VirtualUser:TypeKey(tostring(readySkill))
+                end
             end)
 
             setTask(string.format("⚔️ ปล่อยสกิล [%d/3] ล็อคเป้าใส่: %s (HP: %.0f)", readySkill, targetName, targetHp))
@@ -3424,14 +4206,28 @@ task.spawn(function()
 
     if not isMatch then
         cleanupFlight()
-        setTask("🎁 เคลียร์โค้ดและรับของรางวัลเริ่มต้น...")
+        setTask("⏳ กำลังซิงค์ข้อมูลบัญชีและระบบ Lobby จากเซิร์ฟเวอร์...")
 
-        if lobbyPkts and lobbyPkts.redeemCode then
+        -- รอให้ ReplicatedStorage และ Account State ซิงค์สมบูรณ์ (สูงสุด 6 วินาที)
+        local syncStart = tick()
+        while tick() - syncStart < 6 do
+            lobbyPkts = getLobbyPackets()
+            local s = getAccState()
+            if lobbyPkts and s and s.currencies and isSlotDataStable() then
+                break
+            end
+            task.wait(0.3)
+        end
+        lobbyPkts = getLobbyPackets()
+
+        if not _G.AZ_CodesClaimed and lobbyPkts and lobbyPkts.redeemCode then
+            setTask("🎁 เคลียร์โค้ดและรับของรางวัลเริ่มต้น...")
             local promoCodes = getDynamicPromoCodes()
             for _, code in ipairs(promoCodes) do
                 pcall(function() lobbyPkts.redeemCode:fire(code) end)
-                task.wait(0.15)
+                task.wait(0.08)
             end
+            _G.AZ_CodesClaimed = true
         end
 
         if lobbyPkts then
@@ -3439,7 +4235,7 @@ task.spawn(function()
             pcall(autoClaimLevelMilestones)
             pcall(function() lobbyPkts.claimQuestRewards:fire({ requestId = nextId() }) end)
             pcall(function() lobbyPkts.claimAchievementRewards:fire({ requestId = nextId() }) end)
-            task.wait(0.4)
+            task.wait(0.2)
         end
 
         if lobbyPkts and lobbyPkts.unlockCharacterSlot then
@@ -3447,17 +4243,17 @@ task.spawn(function()
                 local cost = getSlotUnlockCost(slot)
                 if getCurrency("money") >= cost then
                     pcall(function() lobbyPkts.unlockCharacterSlot:fire({ slot = slot, requestId = nextId() }) end)
-                    task.wait(0.2)
+                    task.wait(0.15)
                 end
             end
         end
 
-        -- 1.5 ทำ Delivery Quest 50 เควสต์ปลดล็อคโหมดก่อนอันดับแรก!
+        -- 1.5 ทำ Delivery Quest 50 เควสต์ปลดล็อคโหมดก่อนอันดับแรก (เฉพาะเมื่อเปิดใช้งาน)
         pcall(autoCompleteDeliveryQuests50)
 
-        -- 2. เมื่อได้ตัวละครเทพ/Lyth สลับสวมใส่และอัปเกรด Skill Tree ทันที (Damage -> Crit -> Def -> Spd)
+        -- 2. สลับสวมใส่ตัวละครที่ดีที่สุดที่ครอบครองในสล็อต (เช่น Dragon Eclipse) เพื่อใช้ฟาร์มเงิน
         pcall(function()
-            local hasLyth, topChar = hasAnyLythCharacter()
+            local topChar = getBestOwnedCharacter()
             if topChar then
                 autoEquipCharacterIfOwned(topChar)
                 upgradeActiveSkillsIfPointsAvailable(topChar)
@@ -3467,19 +4263,39 @@ task.spawn(function()
         end)
         -- 3. สวมใส่ Best Title อัตโนมัติ
         pcall(autoEquipBestTitle)
-        -- 4. ตรวจสอบและ Awakening (Evolve) ถ้า Material ครบ
-        local hasLyth, topChar = hasAnyLythCharacter()
-        local activeC = topChar or getCharacter():lower()
-        pcall(function() autoEvolveAwakening(activeC) end)
-        -- 5. คราฟต์และสวมใส่ Best Accessory
-        pcall(autoSummonSlotsManager)
-        pcall(autoCraftAvailableAccessories)
-        pcall(autoEquipBestAccessory)
-        -- 6. สุ่ม Trait 0.04% หรือ 0.01% (ถ้าได้ Lyth จาก summon สุ่มให้ตัว Lyth / ถ้าไม่ได้ ให้รอได้ Flame Director ก่อนค่อยสุ่ม)
-        pcall(autoRerollTargetTrait)
 
-        -- เข้าด่านตามยุทธศาสตร์ 6 ขั้นตอนทันที!
-        enterHighestUnlockedStage()
+        -- 4. ★ ตรวจสอบ SUMMON PROGRESSION FLOW (Slot 1 Sub Summon -> ปลดล็อค Slot 2 -> สุ่ม Slot 2 หา LYTH) ★
+        if not isSummonProgressionComplete() then
+            -- ถ้ามีโรลหรือเงิน >= 500: สุ่ม Slot ใน Lobby ทันที
+            local curr, bal = getRollCurrencyAvailable()
+            if curr then
+                pcall(autoSummonSlotsManager)
+            end
+            -- มั่นใจ 100% ว่าก่อนเข้าด่านหาเงิน ต้องใช้ตัวฟาร์มหลักใน Slot 1 เสมอ (ถ้า Slot 2 ยังไม่ได้ Lyth)
+            pcall(ensureSlot1Equipped)
+            enterHighestUnlockedStage()
+        else
+            -- 5. ★ เมื่อได้ตัวระดับ LYTH ครบแล้ว ถึงจะเข้าสู่ขั้นตอน AWAKENING, CRAFT, REROLL TRAIT, และ RAID ★
+            pcall(function()
+                local topChar = getBestOwnedCharacter()
+                if topChar then
+                    autoEquipCharacterIfOwned(topChar)
+                    upgradeActiveSkillsIfPointsAvailable(topChar)
+                end
+            end)
+            local topChar = getBestOwnedCharacter()
+            local activeC = topChar or getCharacter():lower()
+            pcall(function() autoEvolveAwakening(activeC) end)
+            if hasFlameDirector() then
+                pcall(placeHuTaoInNonLythSlot)
+                pcall(function() autoEvolveAwakening("hutao") end)
+                pcall(function() upgradeActiveSkillsIfPointsAvailable("hutao") end)
+            end
+            pcall(autoCraftAvailableAccessories)
+            pcall(autoEquipBestAccessory)
+            pcall(autoRerollTargetTrait)
+            enterHighestUnlockedStage()
+        end
     else
         setTask("⚔️ กำลังฟาร์มในด่านต่อสู้อัตโนมัติ...")
     end
@@ -3490,6 +4306,7 @@ task.spawn(function()
     -- Loop ตลอดชีพ
     while true do
         if _G.AZ_ThreadId ~= currentThreadId then break end
+        isMatch = checkIsMatch()
         if lobbyPkts then
             pcall(function()
                 lobbyPkts.claimQuestRewards:fire({ requestId = nextId() })
@@ -3498,9 +4315,11 @@ task.spawn(function()
         end
 
         if not isMatch then
-            -- อยู่ในล็อบบี้: ปลดล็อคช่อง 2..4 -> อัปสกิล -> สวมฉายา -> Awakening -> คราฟต์/สวมใส่ Best Acc -> สุ่ม Trait -> เข้าด่าน
+            -- อยู่ในล็อบบี้
             cleanupFlight()
             currentMatchArea = 1
+            hasWarpedToBossArea = false
+            lobbyPkts = getLobbyPackets()
             table.clear(areaSpawnedEnemies)
             table.clear(lastBorderWaitSeen)
             table.clear(lastAreaWaitSeen)
@@ -3508,6 +4327,7 @@ task.spawn(function()
             matchStartTime = tick()
             matchEndSeenTime = 0
             pcall(autoClaimLevelMilestones)
+            pcall(autoEquipBestTitle)
             if lobbyPkts and lobbyPkts.unlockCharacterSlot then
                 for slot = 2, 4 do
                     local cost = getSlotUnlockCost(slot)
@@ -3517,25 +4337,44 @@ task.spawn(function()
                 end
             end
             pcall(autoCompleteDeliveryQuests50)
-            pcall(function()
-                local hasLyth, topChar = hasAnyLythCharacter()
-                if topChar then
-                    autoEquipCharacterIfOwned(topChar)
-                    upgradeActiveSkillsIfPointsAvailable(topChar)
-                else
-                    upgradeActiveSkillsIfPointsAvailable()
+
+            if not isSummonProgressionComplete() then
+                -- อยู่ในขั้นตอนสุ่ม: สวมใส่ตัวฟาร์ม Slot 1 -> สุ่ม Slot 2 -> เงินหมดสลับกลับ Slot 1 -> เข้าด่าน 1 [NIGHTMARE] หาเงิน
+                pcall(ensureSlot1Equipped)
+                pcall(autoEquipBestTitle)
+                local curr, bal = getRollCurrencyAvailable()
+                if curr then
+                    pcall(autoSummonSlotsManager)
                 end
-            end)
-            pcall(autoEquipBestTitle)
-            local hasLyth, topChar = hasAnyLythCharacter()
-            local loopChar = topChar or getCharacter():lower()
-            pcall(function() autoEvolveAwakening(loopChar) end)
-            pcall(autoSummonSlotsManager)
-            pcall(autoCraftAvailableAccessories)
-            pcall(autoEquipBestAccessory)
-            pcall(autoRerollTargetTrait)
-            enterHighestUnlockedStage()
-            task.wait(1.0)
+                pcall(ensureSlot1Equipped)
+                enterHighestUnlockedStage()
+                task.wait(1.0)
+            else
+                -- ได้ตัวระดับ Lyth ครบแล้ว: สวมใส่ Lyth -> Awakening -> Craft -> Reroll Trait -> เข้าด่าน (Mat/Raid)
+                pcall(function()
+                    local topChar = getBestOwnedCharacter()
+                    if topChar then
+                        autoEquipCharacterIfOwned(topChar)
+                        upgradeActiveSkillsIfPointsAvailable(topChar)
+                    else
+                        upgradeActiveSkillsIfPointsAvailable()
+                    end
+                end)
+                pcall(autoEquipBestTitle)
+                local topChar = getBestOwnedCharacter()
+                local loopChar = topChar or getCharacter():lower()
+                pcall(function() autoEvolveAwakening(loopChar) end)
+                if hasFlameDirector() then
+                    pcall(placeHuTaoInNonLythSlot)
+                    pcall(function() autoEvolveAwakening("hutao") end)
+                    pcall(function() upgradeActiveSkillsIfPointsAvailable("hutao") end)
+                end
+                pcall(autoCraftAvailableAccessories)
+                pcall(autoEquipBestAccessory)
+                pcall(autoRerollTargetTrait)
+                enterHighestUnlockedStage()
+                task.wait(1.0)
+            end
         else
             -- อยู่ในด่าน: เช็คจบด่าน Auto Next + ลอยตีมอน 90 องศา + รันสกิล 1 -> 2 -> 3 + เก็บเหรียญ + เก็บฮีลเลือด (<80%)
             handleMatchEndAutoNext()
