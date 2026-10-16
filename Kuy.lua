@@ -178,6 +178,9 @@ local R = {
     HatchEgg        = Remotes and Remotes:WaitForChild("HatchEgg", 5),
     EggAction       = Remotes and Remotes:WaitForChild("EggAction", 5),
     FizzAction      = Remotes and Remotes:WaitForChild("FizzAction", 5),
+    Halloween       = Remotes and (Remotes:FindFirstChild("Halloween") or Remotes:WaitForChild("Halloween", 5)),
+    HalloweenFx     = Remotes and (Remotes:FindFirstChild("HalloweenFx") or Remotes:WaitForChild("HalloweenFx", 5)),
+    Feeding         = Remotes and (Remotes:FindFirstChild("Feeding") or Remotes:WaitForChild("Feeding", 5)),
 }
 
 -- Default Tables (Auto-Overwritten by live syncWithGameConfig)
@@ -243,8 +246,9 @@ local function syncWithGameConfig()
     local sorted = (type(Config.SortedCropIds) == "function" and Config.SortedCropIds()) or {}
     local seenSeeds = {}
 
+    local hwCropNames = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
     local function addCropData(id, c)
-        if not seenSeeds[id] and c then
+        if not seenSeeds[id] and c and not hwCropNames[id] then
             seenSeeds[id] = true
             table.insert(dynamicSeeds, {
                 id     = id,
@@ -382,17 +386,21 @@ if Config and Config.Cards then
     table.sort(ALL_CARDS_OPTS)
 end
 
-local POS_QUEST_NPC     = Vector3.new(-29.4, 7.6, -70.8)
-local POS_HATCHERY_PAD  = Vector3.new(-47.566, 3.2, -46.687)
-local POS_CARD_SHOP     = Vector3.new(72.88, 3.2, -2.85)
-local POS_SEED_SHOP     = Vector3.new(-72.88, 3.5, -2.85)
-local POS_TOWN_WARP     = Vector3.new(0, 3, -22)
-local POS_ARENA_BOARD   = Vector3.new(25.3, 4.55, -59.5)
-local POS_FROST_STATUE  = Vector3.new(-28, 2.1, -6)
+local POS = {
+    QUEST_NPC     = Vector3.new(-29.4, 7.6, -70.8),
+    HATCHERY_PAD  = Vector3.new(-47.566, 3.2, -46.687),
+    CARD_SHOP     = Vector3.new(72.88, 3.2, -2.85),
+    SEED_SHOP     = Vector3.new(-72.88, 3.5, -2.85),
+    TOWN_WARP     = Vector3.new(0, 3, -22),
+    ARENA_BOARD   = Vector3.new(25.3, 4.55, -59.5),
+    FROST_STATUE  = Vector3.new(-28, 2.1, -6),
+}
 
 local function toVector3(val)
     if typeof(val) == "Vector3" then
         return val
+    elseif typeof(val) == "CFrame" then
+        return val.Position
     elseif type(val) == "string" then
         local x, y, z = val:match("([%d%.%-]+)%s*,%s*([%d%.%-]+)%s*,%s*([%d%.%-]+)")
         if x and y and z then
@@ -421,6 +429,7 @@ local S = {
     buyAmount         = 5,
     autoWaterSprinkler= false,
     sprinklerType     = "Rainbow",
+    sprinklerThresholdMinutes = 30,
     autoBuySprinkler  = false,
     selectedSprinklersToBuy = { ["Rainbow"] = true, ["Gold"] = true },
     autoSellOn        = false,
@@ -434,6 +443,9 @@ local S = {
     penFeedMode         = "Feed All Safe (Common/Uncommon)",
     autoHarvestFruit    = false,
     fruitInterval       = 30,
+    autoBuyTrees        = false,
+    autoPlantTrees      = true,
+    selectedTreesToBuy  = { StarFruit = true, Coconut = true, Mango = true, Orange = true, Apple = true },
     autoUpgradeHouse    = false,
     autoEquipBestAll    = false,
     autoRefineProduce   = false,
@@ -452,10 +464,19 @@ local S = {
     autoBossServerHop = false,
 
     -- Quests & Dungeons
-    autoMainQuest     = false,
-    autoQuestOn       = false,
-    questInterval     = 30,
-    autoColosseum     = false,
+    autoMainQuest      = false,
+    autoQuestOn        = false,
+    questInterval      = 30,
+    autoZoneQuests     = true,
+    autoDailyQuests    = true,
+    autoWeeklyQuests   = true,
+    autoDailyLogin     = true,
+    questZoneMode      = "Selected Zones (เลือกตามรายชื่อด้านล่าง)",
+    selectedQuestZones = {
+        [0] = true, [1] = true, [2] = true, [3] = true, [4] = true,
+        [5] = true, [6] = true, [7] = true, [8] = true, [9] = true
+    },
+    autoColosseum      = false,
     arenaMode         = "start",
     autoTower         = false,
     towerFloor        = 1,
@@ -484,6 +505,26 @@ local S = {
     fizzTradeSeedId   = "FizzLime",
     autoFizzTrade     = false,
 
+    -- Halloween Pumpkin Festival Engine
+    autoHalloweenMaster      = false,
+    autoCollectGlowPumpkins  = true,
+    autoHwCheckin            = true,
+    autoHwQuests             = true,
+    autoHwTrack              = true,
+    autoBuyHwEgg             = true,
+    autoBuyHwEggCrystal      = false,
+    autoPlaceHwEgg           = true,
+    autoBuyHwSeeds           = true,
+    selectedHwSeeds          = { ["GhostPumpkin"] = true, ["SilverGarlic"] = true, ["BatCorn"] = true, ["NightRose"] = true, ["GhostMushroom"] = true },
+    autoPlantHwSeeds         = true,
+    autoSellHwProduce        = true,
+    autoCookHwDishes         = false,
+    selectedHwDishes         = { ["GhostPie"] = true },
+    autoBuyHwShop            = false,
+    selectedHwShopItems      = {},
+    hwCycleInterval          = 25,
+    hwTargetSeedStock        = 20,
+
     -- Performance & Anti-AFK
     lowGraphic        = false,
     rendering3D       = true,
@@ -504,14 +545,18 @@ local S = {
 getgenv().BG_Settings = S
 
 -- UI references
-local logCodeElement = nil
-local mobFilterDropdown = nil
-local goldEggStatusPara = nil
-
+local UI_Paras = {
+    logCodeElement = nil,
+    mobFilterDropdown = nil,
+    goldEggStatusPara = nil,
+    sprinklerStatusPara = nil,
+    orchardStatusPara = nil,
+}
 -- Forward declarations to eliminate nil call errors
 local isGoldEggActive = nil
 local getGoldEggStatusString = nil
 local getDecoratedLogString = nil
+local HW = {}
 local doRealFarmCycle = nil
 local buySeedsAtShop = nil
 local buySeedsBatch = nil
@@ -525,6 +570,8 @@ local doRefineAllProduce = nil
 local doBuyBedGroups = nil
 local doPenFeedCycle = nil
 local doCardPullCycle = nil
+local shouldRunMaintenance = nil
+local doCooperativeMaintenanceSequence = nil
 
 -- ===== HELPER FUNCTIONS =====
 local function invoke(remote, ...)
@@ -564,9 +611,20 @@ local function parseMultiDropdown(sel)
     return items
 end
 
+trackConnection(plr.CharacterAdded:Connect(function(newChar)
+    char = newChar
+end))
+
 local function getHRP()
-    char = plr.Character or plr.CharacterAdded:Wait()
-    return char and char:FindFirstChild("HumanoidRootPart")
+    char = plr.Character
+    if not char or not char.Parent then
+        return nil
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then
+        return nil
+    end
+    return char:FindFirstChild("HumanoidRootPart")
 end
 
 -- Movement Engine
@@ -589,9 +647,11 @@ local function moveToCFrame(targetCF, onFinish)
         local ti = TweenInfo.new(dur, Enum.EasingStyle.Linear)
         activeTween = TweenService:Create(root, ti, {CFrame = targetCF})
         activeTween:Play()
-        activeTween.Completed:Once(function()
+        activeTween.Completed:Once(function(playbackState)
             activeTween = nil
-            if onFinish then onFinish() end
+            if playbackState == Enum.PlaybackState.Completed and onFinish then
+                onFinish()
+            end
         end)
     else
         root.CFrame = targetCF
@@ -661,6 +721,12 @@ local function moveAndFaceMonster(targetPart, targetModel)
     local combatCF = CFrame.lookAt(targetPos, mobPos)
 
     root.CFrame = combatCF
+    if isFloat then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
 end
 
 -- ===== FIZZ GOLDEN EGG STATE DETECTION =====
@@ -721,8 +787,8 @@ trackConnection(Remotes.DataChanged.OnClientEvent:Connect(function(d)
         end
         if type(getDecoratedLogString) == "function" then
             local ok, logStr = pcall(getDecoratedLogString)
-            if ok and logCodeElement and logCodeElement.SetCode and type(logStr) == "string" then
-                pcall(function() logCodeElement:SetCode(logStr) end)
+            if ok and UI_Paras.logCodeElement and UI_Paras.logCodeElement.SetCode and type(logStr) == "string" then
+                pcall(function() UI_Paras.logCodeElement:SetCode(logStr) end)
             end
         end
     end
@@ -764,6 +830,12 @@ end
 
 local function getSeedWorth(seedId)
     if not seedId or seedId == "" then return 0 end
+    if Config and Config.HW and Config.HW.Crops and Config.HW.Crops[seedId] then
+        local hw = Config.HW.Crops[seedId]
+        local p = tonumber(hw.seedPrice) or 0
+        if p > 0 then return p end
+        return (tonumber(hw.crystals) or 0) * 100
+    end
     for _, s in ipairs(ALL_SEEDS) do
         if s.id == seedId then
             local p = tonumber(s.price) or 0
@@ -905,8 +977,8 @@ local function logActivity(act, loc)
     if loc then S.currentLocation = loc end
 
     local logStr = getDecoratedLogString()
-    if logCodeElement and logCodeElement.SetCode then
-        pcall(function() logCodeElement:SetCode(logStr) end)
+    if UI_Paras.logCodeElement and UI_Paras.logCodeElement.SetCode then
+        pcall(function() UI_Paras.logCodeElement:SetCode(logStr) end)
     end
 end
 
@@ -1010,76 +1082,12 @@ end
 local function saveConfig(name)
     if not writefile then return notify("Config", "Filesystem not supported") end
     name = (name and name ~= "") and name or "default"
-    local cfg = {
-        moveMode          = S.moveMode,
-        tweenSpeed        = S.tweenSpeed,
-        autoGoldEgg       = S.autoGoldEgg,
-        autoFarm          = S.autoFarm,
-        cropInterval      = S.cropInterval,
-        autoBuySeed       = S.autoBuySeed,
-        autoBuyBeds       = S.autoBuyBeds,
-        plantSeedId       = S.plantSeedId,
-        selectedSeeds     = S.selectedSeeds,
-        buyAmount         = S.buyAmount,
-        autoSellOn        = S.autoSellOn,
-        autoSellSecs      = S.autoSellSecs,
-        sellMode          = S.sellMode,
-        autoFarmMobs      = S.autoFarmMobs,
-        autoTargetMonster = S.autoTargetMonster,
-        warpZone          = S.warpZone,
-        selectedMonsters  = S.selectedMonsters,
-        mobPriority       = S.mobPriority,
-        autoTeamSkill     = S.autoTeamSkill,
-        selectedBosses    = S.selectedBosses,
-        autoBossHunt      = S.autoBossHunt,
-        autoBossServerHop = S.autoBossServerHop,
-        autoQuestOn       = S.autoQuestOn,
-        questInterval     = S.questInterval,
-        autoColosseum     = S.autoColosseum,
-        arenaMode         = S.arenaMode,
-        autoTower         = S.autoTower,
-        towerFloor        = S.towerFloor,
-        autoDungeon       = S.autoDungeon,
-        selectedDungeon   = S.selectedDungeon,
-        dungeonTargetMode = S.dungeonTargetMode,
-        dungeonInterval   = S.dungeonInterval,
-        autoCardPull      = S.autoCardPull,
-        stopOnCards       = S.stopOnCards,
-        autoBuyCardTicket = S.autoBuyCardTicket,
-        autoBuyEgg        = S.autoBuyEgg,
-        buyEggType        = S.buyEggType,
-        selectedEggsToBuy = S.selectedEggsToBuy,
-        buyEggAmount      = S.buyEggAmount,
-        buyEggInterval    = S.buyEggInterval,
-        hatchEggType      = S.hatchEggType,
-        hatchEggAmount    = S.hatchEggAmount,
-        autoHatchEgg      = S.autoHatchEgg,
-        autoPenCollect      = S.autoPenCollect,
-        penCollectInterval  = S.penCollectInterval,
-        autoPenBest         = S.autoPenBest,
-        autoPenFeed         = S.autoPenFeed,
-        penFeedMode         = S.penFeedMode,
-        autoHarvestFruit    = S.autoHarvestFruit,
-        fruitInterval       = S.fruitInterval,
-        autoUpgradeHouse    = S.autoUpgradeHouse,
-        autoEquipBestAll    = S.autoEquipBestAll,
-        autoRefineProduce   = S.autoRefineProduce,
-        autoMainQuest     = S.autoMainQuest,
-        fizzTradeSeedId   = S.fizzTradeSeedId,
-        autoFizzTrade     = S.autoFizzTrade,
-        autoOpenAllEggs     = S.autoOpenAllEggs,
-        autoFillIncubator   = S.autoFillIncubator,
-        selectedEggsToPlace = S.selectedEggsToPlace,
-        autoBestTeam      = S.autoBestTeam,
-        autoBestGuard     = S.autoBestGuard,
-        lowGraphic        = S.lowGraphic,
-        rendering3D       = S.rendering3D,
-        antiAFK           = S.antiAFK,
-        fpsCap            = S.fpsCap,
-        webhookUrl        = S.webhookUrl,
-        webhookAutoLog    = S.webhookAutoLog,
-        webhookInterval   = S.webhookInterval,
-    }
+    local cfg = {}
+    for k, v in pairs(S) do
+        if type(v) ~= "function" and k ~= "currentActivity" and k ~= "currentLocation" then
+            cfg[k] = v
+        end
+    end
     local jsonStr = json_encode(cfg)
     local ok, err = pcall(writefile, CONFIG_FOLDER .. "/" .. name .. ".json", jsonStr)
     if ok then
@@ -1128,6 +1136,10 @@ end
 
 -- ===== PROXIMITY-AWARE SEED SHOP & FARM ENGINE =====
 local function getMyPlot()
+    local cached = getgenv().BG_CachedPlot
+    if cached and cached.Parent then
+        return cached
+    end
     local m = workspace:FindFirstChild("Map")
     local b = m and m:FindFirstChild("Blockout")
     local plots = b and b:FindFirstChild("Plots")
@@ -1135,6 +1147,7 @@ local function getMyPlot()
 
     for _, p in ipairs(plots:GetChildren()) do
         if p:GetAttribute("OwnerUserId") == plr.UserId then
+            getgenv().BG_CachedPlot = p
             return p
         end
     end
@@ -1206,7 +1219,20 @@ buySeedsBatch = function(seedItems, isForce)
     isBuyingSeeds = true
     logActivity(string.format("Warping to Seed Shop (Buying %d in-stock types)...", #validItems), "Seed Shop")
     invoke(R.QuickWarp, "SeedShop")
-    task.wait(1.2)
+    task.wait(0.5)
+
+    -- Proximity verification at Seed Shop Pad (guarantees server allows purchases)
+    local root = getHRP()
+    if root then
+        root.CFrame = CFrame.new(POS.SEED_SHOP)
+        task.wait(0.3)
+    end
+    local shopPad = workspace:FindFirstChild("ShopPad", true)
+    local prompt = shopPad and shopPad:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Enabled and fireproximityprompt then
+        pcall(function() fireproximityprompt(prompt, 0) end)
+        task.wait(0.25)
+    end
 
     local cd = CachedData or getgenv().CachedData or {}
     local anySuccess = false
@@ -1410,126 +1436,186 @@ local isFarming = false
 doRealFarmCycle = function()
     if isFarming then return end
     isFarming = true
+    lastCropCheck = tick()
 
     local myPlot = getMyPlot()
     local farmCenter = getMyPlotCenter()
-    local root = getHRP()
+    local beds = getMyPlotBeds()
+    if #beds == 0 then
+        isFarming = false
+        return
+    end
 
+    -- Find crops folder for our plot
+    local plotName = myPlot and myPlot.Name or "Plot_1"
+    local mapFolder = workspace:FindFirstChild("Map")
+    local cropsRoot = mapFolder and mapFolder:FindFirstChild("Crops")
+    local plotCrops = cropsRoot and cropsRoot:FindFirstChild(plotName)
+
+    -- Phase 1: Pre-scan all beds BEFORE moving or warping! (Zero movement if nothing to do!)
+    local bedsToProcess = {}
+    local totalSeedsNeeded = 0
+    local totalRipeCount = 0
+    local totalEmptyCount = 0
+
+    for _, bed in ipairs(beds) do
+        local ripeCells = {}
+        local emptyCells = {}
+        for _, cell in ipairs(bed.cells) do
+            local cropModel = plotCrops and plotCrops:FindFirstChild("Crop_" .. cell.row .. "_" .. cell.col)
+            if cropModel then
+                local stage = cropModel:GetAttribute("Stage") or 0
+                if stage >= 3 then
+                    table.insert(ripeCells, cell)
+                    totalRipeCount = totalRipeCount + 1
+                end
+            else
+                table.insert(emptyCells, cell)
+                totalEmptyCount = totalEmptyCount + 1
+            end
+        end
+        if #ripeCells > 0 or #emptyCells > 0 then
+            table.insert(bedsToProcess, {
+                name = bed.name,
+                center = bed.center,
+                ripeCells = ripeCells,
+                emptyCells = emptyCells
+            })
+            totalSeedsNeeded = totalSeedsNeeded + #ripeCells + #emptyCells
+        end
+    end
+
+    -- IF NO WORK NEEDED (ALL CROPS GROWING): ZERO MOVEMENT, ZERO TELEPORT!
+    if #bedsToProcess == 0 or not getgenv().BG_Running then
+        isFarming = false
+        return
+    end
+
+    -- Only warp to Farm ONCE if work is actually needed!
+    local root = getHRP()
     if farmCenter and root then
         local distFromCenter = (root.Position - farmCenter).Magnitude
         if distFromCenter > 35 then
             invoke(R.QuickWarp, "Farm")
-            task.wait(0.8)
+            task.wait(0.6)
             root = getHRP()
             if root then root.CFrame = CFrame.new(farmCenter) end
-            task.wait(0.4)
+            task.wait(0.3)
         end
     end
 
-    local beds = getMyPlotBeds()
-    if #beds > 0 then
-        -- Find crops folder for our plot
-        local plotName = myPlot and myPlot.Name or "Plot_1"
-        local mapFolder = workspace:FindFirstChild("Map")
-        local cropsRoot = mapFolder and mapFolder:FindFirstChild("Crops")
-        local plotCrops = cropsRoot and cropsRoot:FindFirstChild(plotName)
+    logActivity(string.format("Farm Sweep: %d Beds Need Work (%d Ripe, %d Empty)", #bedsToProcess, totalRipeCount, totalEmptyCount), "Farm Plot")
 
-        -- Phase 1: Pre-scan all beds to identify work needed
-        local bedsToProcess = {}
-        local totalSeedsNeeded = 0
-        local totalRipeCount = 0
-        local totalEmptyCount = 0
-
-        for _, bed in ipairs(beds) do
-            local ripeCells = {}
-            local emptyCells = {}
-            for _, cell in ipairs(bed.cells) do
-                local cropModel = plotCrops and plotCrops:FindFirstChild("Crop_" .. cell.row .. "_" .. cell.col)
-                if cropModel then
-                    local stage = cropModel:GetAttribute("Stage") or 0
-                    if stage >= 3 then
-                        table.insert(ripeCells, cell)
-                        totalRipeCount = totalRipeCount + 1
-                    end
-                else
-                    table.insert(emptyCells, cell)
-                    totalEmptyCount = totalEmptyCount + 1
-                end
-            end
-            if #ripeCells > 0 or #emptyCells > 0 then
-                table.insert(bedsToProcess, {
-                    name = bed.name,
-                    center = bed.center,
-                    ripeCells = ripeCells,
-                    emptyCells = emptyCells
-                })
-                totalSeedsNeeded = totalSeedsNeeded + #ripeCells + #emptyCells
-            end
-        end
-
-        logActivity(string.format("Farm Sweep: %d Beds Need Work (%d Ripe, %d Empty)", #bedsToProcess, totalRipeCount, totalEmptyCount), "Farm Plot")
-
-        if #bedsToProcess > 0 and getgenv().BG_Running then
-            -- Phase 2: Check inventory seeds and buy if needed
-            local rawSeeds = (S.selectedSeeds and #S.selectedSeeds > 0 and S.selectedSeeds) or { S.plantSeedId or "Carrot" }
-            local seedsToUse = getSortedSeeds(rawSeeds)
-            if #seedsToUse == 0 then seedsToUse = { "Carrot" } end
-
-            local seedsInBag = getInventorySeeds()
-            local bagCounts = {}
-            local totalHave = 0
-            for _, sId in ipairs(seedsToUse) do
-                local c = tonumber(seedsInBag[sId]) or 0
-                bagCounts[sId] = c
-                totalHave = totalHave + c
-            end
-
-            if totalHave < totalSeedsNeeded and S.autoBuySeed then
-                local neededTotal = totalSeedsNeeded - totalHave
-                local buyQueue = {}
-
-                -- Inspect selected seeds in tier order (most expensive first)
-                -- If a seed has NO stock in shop: SKIP IT WITHOUT WARPING!
-                -- Only queue seeds that actually have remaining stock!
-                for _, sId in ipairs(seedsToUse) do
-                    if totalHave >= totalSeedsNeeded then break end
-                    local inStock = getSeedStockRemaining(sId)
-                    if inStock > 0 then
-                        local toBuy = math.min(neededTotal, inStock, S.buyAmount or 5)
-                        if toBuy > 0 then
-                            table.insert(buyQueue, { id = sId, amount = toBuy })
-                            totalHave = totalHave + toBuy
-                            neededTotal = totalSeedsNeeded - totalHave
+    if #bedsToProcess > 0 and getgenv().BG_Running then
+            -- Phase 2: Hybrid Seed Management (Event Seeds strictly capped at 18, then Normal Seeds for ALL remaining beds!)
+            local hwCropNames = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
+            local growingHwPlanted = 0
+            if plotCrops then
+                for _, c in ipairs(plotCrops:GetChildren()) do
+                    local id = c:GetAttribute("CropId") or c:GetAttribute("Crop") or c:GetAttribute("Seed") or c:GetAttribute("Id")
+                    if id and hwCropNames[id] then
+                        local stage = tonumber(c:GetAttribute("Stage")) or 0
+                        -- Only count crops still growing in the ground (< Stage 3)
+                        -- Any ripe crops (Stage >= 3) will be harvested in Sub-pass A, freeing up those slots!
+                        if stage < 3 then
+                            growingHwPlanted = growingHwPlanted + 1
                         end
                     end
                 end
+            end
 
-                -- ONLY WARP TO SEED SHOP IF WE HAVE AT LEAST ONE SEED IN STOCK TO BUY!
+            local maxHwAllowed = 18
+            local hwSlotsRemaining = 0
+            if S.autoHalloweenMaster and S.autoPlantHwSeeds then
+                hwSlotsRemaining = math.max(0, maxHwAllowed - growingHwPlanted)
+            end
+
+            -- 1. Halloween Seeds Pool (Strictly Most Expensive / Highest Tier First!)
+            local hwSeedsToUse = {}
+            if S.autoHalloweenMaster and S.autoPlantHwSeeds and S.selectedHwSeeds then
+                local hwOrder = { "GhostMushroom", "NightRose", "BatCorn", "SilverGarlic", "GhostPumpkin" }
+                for _, sName in ipairs(hwOrder) do
+                    if S.selectedHwSeeds[sName] then
+                        table.insert(hwSeedsToUse, sName)
+                    end
+                end
+                table.sort(hwSeedsToUse, function(a, b)
+                    return getSeedWorth(a) > getSeedWorth(b)
+                end)
+            end
+
+            -- 2. Normal Seeds Pool (Pure Normal crops - MUST NEVER contain any Halloween crop!)
+            local normalRaw = {}
+            local userNormalList = (S.selectedSeeds and #S.selectedSeeds > 0 and S.selectedSeeds) or { S.plantSeedId or "Carrot" }
+            for _, s in ipairs(userNormalList) do
+                if s and not hwCropNames[s] then
+                    table.insert(normalRaw, s)
+                end
+            end
+            if #normalRaw == 0 then
+                table.insert(normalRaw, "Carrot")
+            end
+            local normalSeedsToUse = {}
+            for _, s in ipairs(getSortedSeeds(normalRaw)) do
+                if s and not hwCropNames[s] then
+                    table.insert(normalSeedsToUse, s)
+                end
+            end
+            if #normalSeedsToUse == 0 then
+                normalSeedsToUse = { "Carrot" }
+            end
+
+            -- 3. Inventory counts
+            local seedsInBag = getInventorySeeds()
+            local bagCounts = {}
+            for _, sId in ipairs(hwSeedsToUse) do
+                bagCounts[sId] = tonumber(seedsInBag[sId]) or 0
+            end
+            local normalTotalHave = 0
+            for _, sId in ipairs(normalSeedsToUse) do
+                local c = tonumber(seedsInBag[sId]) or 0
+                bagCounts[sId] = c
+                normalTotalHave = normalTotalHave + c
+            end
+
+            -- 4. Auto-buy normal seeds if normal seed inventory is below remaining plot demand
+            local normalSlotsNeeded = math.max(0, totalSeedsNeeded - hwSlotsRemaining)
+            if normalSlotsNeeded > 0 and normalTotalHave < normalSlotsNeeded and (S.autoBuySeed or S.autoFarm) then
+                local neededTotal = normalSlotsNeeded - normalTotalHave
+                local buyQueue = {}
+                for _, sId in ipairs(normalSeedsToUse) do
+                    if normalTotalHave >= normalSlotsNeeded then break end
+                    local inStock = getSeedStockRemaining(sId)
+                    if inStock > 0 then
+                        local toBuy = math.min(neededTotal, inStock, math.max(S.buyAmount or 5, neededTotal))
+                        if toBuy > 0 then
+                            table.insert(buyQueue, { id = sId, amount = toBuy })
+                            normalTotalHave = normalTotalHave + toBuy
+                            neededTotal = normalSlotsNeeded - normalTotalHave
+                        end
+                    end
+                end
                 if #buyQueue > 0 then
                     buySeedsBatch(buyQueue, false)
                     seedsInBag = getInventorySeeds()
-                    totalHave = 0
-                    for _, sId in ipairs(seedsToUse) do
-                        local c = tonumber(seedsInBag[sId]) or 0
-                        bagCounts[sId] = c
-                        totalHave = totalHave + c
+                    for _, sId in ipairs(normalSeedsToUse) do
+                        bagCounts[sId] = tonumber(seedsInBag[sId]) or 0
                     end
                 end
             end
 
-            -- Phase 3: Bed-by-Bed Proximity Harvest & Plant Sweep
-            local seedNamesStr = table.concat(seedsToUse, " > ")
-            local seedPointer = 1
+            -- Phase 3: Bed-by-Bed Proximity Harvest & Hybrid Plant Sweep
+            local hwPointer = 1
+            local normalPointer = 1
             local playerMoved = false
 
             for _, bed in ipairs(bedsToProcess) do
-                if not S.autoFarm or not getgenv().BG_Running then break end
+                if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
                 if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
 
                 root = getHRP()
                 if not root then break end
 
-                -- Step to bed center if player is further than 7 studs (ensures all 9 cells are within ~5.6 studs!)
                 local distToBed = (root.Position - bed.center).Magnitude
                 if distToBed > 7 then
                     root.CFrame = CFrame.new(bed.center + Vector3.new(0, 1.5, 0))
@@ -1540,15 +1626,11 @@ doRealFarmCycle = function()
                 -- Sub-pass A: Harvest all ripe cells in this bed
                 local newlyEmptied = {}
                 for _, cell in ipairs(bed.ripeCells) do
-                    if not S.autoFarm or not getgenv().BG_Running then break end
+                    if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
                     if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
 
                     local ok, res = invoke(R.TillAction, "use", { cell.row, cell.col }, nil)
-                    if ok and type(res) == "table" and res.ok then
-                        table.insert(newlyEmptied, cell)
-                    else
-                        table.insert(newlyEmptied, cell)
-                    end
+                    table.insert(newlyEmptied, cell)
                     task.wait(0.03)
                 end
 
@@ -1557,39 +1639,54 @@ doRealFarmCycle = function()
                 for _, c in ipairs(bed.emptyCells) do table.insert(cellsToPlant, c) end
                 for _, c in ipairs(newlyEmptied) do table.insert(cellsToPlant, c) end
 
-                -- Sub-pass B: Plant all empty cells in this bed
+                -- Sub-pass B: Hybrid Planting (Event seeds strictly capped at 18 limit, then Normal seeds for ALL remaining beds!)
                 for _, cell in ipairs(cellsToPlant) do
-                    if not S.autoFarm or not getgenv().BG_Running then break end
+                    if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
                     if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
 
-                    while seedPointer <= #seedsToUse and (bagCounts[seedsToUse[seedPointer]] or 0) <= 0 do
-                        seedPointer = seedPointer + 1
+                    local chosenSeed = nil
+
+                    -- Priority 1: Plant Halloween seed ONLY if hwSlotsRemaining > 0 AND we have Halloween seeds in bag
+                    if hwSlotsRemaining > 0 and #hwSeedsToUse > 0 then
+                        while hwPointer <= #hwSeedsToUse and (bagCounts[hwSeedsToUse[hwPointer]] or 0) <= 0 do
+                            hwPointer = hwPointer + 1
+                        end
+                        if hwPointer <= #hwSeedsToUse then
+                            chosenSeed = hwSeedsToUse[hwPointer]
+                            bagCounts[chosenSeed] = bagCounts[chosenSeed] - 1
+                            hwSlotsRemaining = hwSlotsRemaining - 1
+                        end
                     end
 
-                    local chosenSeed
-                    if seedPointer <= #seedsToUse then
-                        chosenSeed = seedsToUse[seedPointer]
-                        bagCounts[chosenSeed] = bagCounts[chosenSeed] - 1
-                    else
-                        chosenSeed = seedsToUse[1] or S.plantSeedId or "Carrot"
+                    -- Priority 2: Plant Normal seed into all other empty cells (Once Halloween reaches 18 cap or out of seeds!)
+                    if not chosenSeed then
+                        while normalPointer <= #normalSeedsToUse and (bagCounts[normalSeedsToUse[normalPointer]] or 0) <= 0 do
+                            normalPointer = normalPointer + 1
+                        end
+                        if normalPointer <= #normalSeedsToUse then
+                            chosenSeed = normalSeedsToUse[normalPointer]
+                            bagCounts[chosenSeed] = bagCounts[chosenSeed] - 1
+                        end
                     end
 
-                    fire(R.SelectSeed, chosenSeed)
-                    invoke(R.TillAction, "use", { cell.row, cell.col }, chosenSeed)
-                    task.wait(0.03)
+                    -- ONLY plant if we actually have a chosen seed available
+                    if chosenSeed and (not hwCropNames[chosenSeed] or hwSlotsRemaining >= 0) then
+                        fire(R.SelectSeed, chosenSeed)
+                        invoke(R.TillAction, "use", { cell.row, cell.col }, chosenSeed)
+                        task.wait(0.03)
+                    end
                 end
             end
 
-            -- Phase 4: Smooth return to center after sweep
+            -- Phase 4: Only re-center if player somehow stepped far outside plot (> 50 studs)
             if playerMoved and farmCenter then
                 root = getHRP()
-                if root then
+                if root and (root.Position - farmCenter).Magnitude > 50 then
                     root.CFrame = CFrame.new(farmCenter)
                     task.wait(0.1)
                 end
             end
         end
-    end
 
     isFarming = false
 end
@@ -1601,19 +1698,29 @@ local isCollectingCoins = false
 doPenCoinCollect = function(force)
     if isCollectingCoins then return end
     if not force and not S.autoPenCollect then return end
+
+    local bank = tonumber(CachedData and CachedData.penBank and CachedData.penBank.bank) or 0
+    if not force and bank <= 0 then
+        return
+    end
+    if force and bank <= 0 then
+        notify("Pen Coins", "No coins in Pen Chest to collect! (0 coins)")
+        return
+    end
+
     isCollectingCoins = true
 
     local myPlot = getMyPlot()
     if not myPlot then isCollectingCoins = false return end
 
-    local chest = myPlot:FindFirstChild("PenChest")
-    local chestBody = chest and (chest:FindFirstChild("Body") or chest.PrimaryPart or chest:FindFirstChildOfClass("BasePart"))
+    local chest = myPlot:FindFirstChild("PenChest", true)
     local root = getHRP()
-    if not chestBody or not root then isCollectingCoins = false return end
+    if not chest or not root then isCollectingCoins = false return end
 
     -- Warp directly in front of Pen Chest
-    local chestTargetCF = CFrame.lookAt(chestBody.Position + Vector3.new(0, 2.5, 3.0), chestBody.Position)
-    root.CFrame = chestTargetCF
+    local chestPos = (chest:IsA("Model") and chest:GetPivot().Position) or (chest:IsA("BasePart") and chest.Position)
+    if not chestPos then isCollectingCoins = false return end
+    root.CFrame = CFrame.new(chestPos + Vector3.new(0, 2.0, 0))
     task.wait(0.35)
 
     -- Abort if toggle was turned off during warp
@@ -1652,17 +1759,7 @@ doEquipBestAll = function(force)
     if not force and not S.autoEquipBestAll then return end
     isEquippingBest = true
 
-    local myPlot = getMyPlot()
-    local chest = myPlot and myPlot:FindFirstChild("PenChest")
-    local chestBody = chest and (chest:FindFirstChild("Body") or chest.PrimaryPart or chest:FindFirstChildOfClass("BasePart"))
-    local root = getHRP()
-
-    -- Single clean warp to Animal Yard
-    if chestBody and root then
-        local penTargetCF = CFrame.lookAt(chestBody.Position + Vector3.new(0, 2.5, 4.0), chestBody.Position)
-        root.CFrame = penTargetCF
-        task.wait(0.4)
-    end
+    -- Remotes for penBest, guard, and team best work globally without distance restriction! (Pure non-blocking)
 
     logActivity("Filling Empty Slots & Equipping Best Animals...", "Animal Pen")
 
@@ -1733,68 +1830,308 @@ doEquipBestAll = function(force)
     notify("Equip Best All", summary)
     logActivity(summary, "Animal Pen")
 
-    if S.autoFarm then
-        local center = getMyPlotCenter()
-        if center then
-            root = getHRP()
-            if root then root.CFrame = CFrame.new(center) end
-        end
-    end
     isEquippingBest = false
 end
 
 -- ==============================================================================
 -- 🍎 ORCHARD FRUIT TREE HARVEST ENGINE (treeHarvest)
 -- ==============================================================================
+getReadyFruitTrees = function()
+    local readyList = {}
+    local cd = CachedData or getgenv().CachedData or {}
+    local trees = cd.trees or {}
+    if not Config or not Config.TreeState then return readyList end
+    local nowServer = workspace:GetServerTimeNow()
+    local maxHang = (Config.FruitHang and Config.FruitHang(cd)) or 100
+
+    for treeKey, treeData in pairs(trees) do
+        local ok, mature, fruitsReady, nextSecs = pcall(Config.TreeState, treeData, nowServer, maxHang)
+        if ok and fruitsReady and fruitsReady > 0 then
+            table.insert(readyList, {
+                key = treeKey,
+                data = treeData,
+                fruits = fruitsReady,
+                id = treeData.id,
+                nextSecs = math.floor(nextSecs or 0)
+            })
+        end
+    end
+    return readyList
+end
+
+getOrchardFruitStatusString = function()
+    local cd = CachedData or getgenv().CachedData or {}
+    local trees = cd.trees or {}
+    local treeCount = 0
+    for _ in pairs(trees) do treeCount = treeCount + 1 end
+    if treeCount == 0 then
+        return "🌳 สวนผลไม้: ยังไม่ได้ปลูกต้นไม้ในแปลง (เปิด Auto Buy หรือกดซื้อต้นไม้)"
+    end
+
+    local readyList = getReadyFruitTrees()
+    local totalFruits = 0
+    for _, item in ipairs(readyList) do
+        totalFruits = totalFruits + item.fruits
+    end
+
+    if #readyList > 0 then
+        return string.format("🌳 สวนผลไม้: ปลูกแล้ว %d/9 ต้น\n🍎 ผลไม้สุกพร้อมเก็บ: %d ผล (จาก %d ต้น)\n✨ สถานะ: พร้อมวาร์ปไปเก็บทันที!", treeCount, totalFruits, #readyList)
+    else
+        return string.format("🌳 สวนผลไม้: ปลูกแล้ว %d/9 ต้น\n⏳ ผลไม้สุก: ยังไม่มีผลสุก (กำลังรอผลไม้โต - ไม่วาร์ปไปรบกวน)", treeCount)
+    end
+end
+
 local isHarvestingFruit = false
 doFruitTreeHarvest = function(force)
     if isHarvestingFruit then return end
     if not force and not S.autoHarvestFruit then return end
-    isHarvestingFruit = true
 
-    local myPlot = getMyPlot()
-    local treesFolder = myPlot and myPlot:FindFirstChild("Trees")
-    if not treesFolder or #treesFolder:GetChildren() == 0 then
-        if force then notify("Orchard", "No fruit trees planted on your plot!") end
-        isHarvestingFruit = false
+    local readyTrees = getReadyFruitTrees()
+    if #readyTrees == 0 then
+        if force then
+            notify("Orchard", "ยังไม่มีผลไม้สุกในสวน! (กำลังรอผลไม้เกิด — ไม่วาร์ปไปเปลืองเวลา)")
+        end
         return
     end
 
-    local root = getHRP()
-    local count = 0
-    for _, treeModel in ipairs(treesFolder:GetChildren()) do
-        if not getgenv().BG_Running then break end
-        if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
+    isHarvestingFruit = true
+    local s, err = pcall(function()
+        local myPlot = getMyPlot()
+        local treesFolder = myPlot and myPlot:FindFirstChild("Trees")
+        local count = 0
+        local totalHarvested = 0
 
-        local treeKey = treeModel:GetAttribute("TreeKey") or treeModel.Name:match("Tree_(.+)") or treeModel.Name
-        local pivot = treeModel:GetPivot()
+        logActivity(string.format("🍎 Found %d fruit trees ready for harvest! Warping to pick...", #readyTrees), "Orchard")
 
-        if root and pivot then
-            root.CFrame = pivot + Vector3.new(0, 2.5, 3.0)
-            task.wait(0.3)
+        for _, readyInfo in ipairs(readyTrees) do
+            if not getgenv().BG_Running then break end
+            if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
+
+            local treeKey = readyInfo.key
+            local treeData = readyInfo.data
+
+            -- 1. Find exact physical tree part/model in plot
+            local targetCF = nil
+            if treesFolder then
+                for _, tm in ipairs(treesFolder:GetChildren()) do
+                    local mKey = tm:GetAttribute("TreeKey") or tm.Name:match("Tree_(.+)") or tm.Name
+                    if mKey == treeKey then
+                        -- Stand directly at the base of the tree (0 horizontal offset to guarantee server proximity check)
+                        targetCF = tm:GetPivot() + Vector3.new(0, 2.0, 0)
+                        break
+                    end
+                end
+            end
+
+            -- 2. Fallback to tree coordinates
+            if not targetCF and myPlot and treeData and treeData.x and treeData.z then
+                local plotCF = myPlot:GetPivot()
+                targetCF = plotCF * CFrame.new(treeData.x, 2.0, treeData.z)
+            end
+
+            local root = getHRP()
+            if root and targetCF then
+                root.CFrame = targetCF
+                task.wait(0.25)
+            end
+
+            local ok, res = invoke(R.FarmAction, "treeHarvest", treeKey)
+            if ok then
+                count = count + 1
+                totalHarvested = totalHarvested + (readyInfo.fruits or 1)
+                local msg = (type(res) == "string" and res ~= "") and res or string.format("เก็บผลไม้จากต้น %s สำเร็จ!", tostring(treeKey))
+                notify("Orchard Fruit", msg)
+                logActivity(msg, "Orchard")
+            end
+            task.wait(0.15)
         end
 
-        local ok, res = invoke(R.FarmAction, "treeHarvest", treeKey)
-        if ok and type(res) == "string" and res ~= "" then
-            count = count + 1
-            notify("Orchard Fruit", res)
-            logActivity(res, "Orchard")
+        if count > 0 then
+            logActivity(string.format("🌳 เก็บผลไม้เรียบร้อยจาก %d ต้น! (ได้ผลผลิตประมาณ %d ผล)", count, totalHarvested), "Orchard")
         end
-        task.wait(0.2)
-    end
 
-    if force and count == 0 then
-        notify("Orchard", "All fruit trees checked (no ripe fruits).")
-    end
-
-    if S.autoFarm then
-        local center = getMyPlotCenter()
-        if center then
-            root = getHRP()
-            if root then root.CFrame = CFrame.new(center) end
+        if S.autoFarm then
+            local center = getMyPlotCenter()
+            if center then
+                local root = getHRP()
+                if root then root.CFrame = CFrame.new(center + Vector3.new(0, 1.8, 0)) end
+            end
         end
-    end
+    end)
+
     isHarvestingFruit = false
+end
+
+-- ==============================================================================
+-- 🌳 ORCHARD FRUIT TREE AUTO BUY & AUTO PLANT ENGINE
+-- ==============================================================================
+local isExecutingTreeCycle = false
+local lastTreeCycleCheck = 0
+
+local function getFreeTreeSpot()
+    local myPlot = getMyPlot()
+    if not myPlot or not (Config and Config.TreeBlocked) then return nil end
+    local cd = CachedData or getgenv().CachedData or {}
+    local state = {
+        builds = cd.builds,
+        nests = cd.nests,
+        trees = cd.trees or {},
+        houseAt = cd.houseAt,
+        houseTier = cd.houseTier
+    }
+
+    -- 1. Check Config.Orchard.OldSlots first
+    for _, slot in ipairs((Config.Orchard and Config.Orchard.OldSlots) or {}) do
+        local x, z = slot[1], slot[2]
+        if not Config.TreeBlocked(myPlot, state, x, z, nil) then
+            return { x = x, z = z }
+        end
+    end
+
+    -- 2. Grid scan around plot
+    for x = -50, 50, 5 do
+        for z = -50, 50, 5 do
+            if not Config.TreeBlocked(myPlot, state, x, z, nil) then
+                return { x = x, z = z }
+            end
+        end
+    end
+    return nil
+end
+
+local function doBuyAndPlantTreeStep(isManual)
+    if isExecutingTreeCycle then return false end
+    if not isManual and not S.autoBuyTrees and not S.autoPlantTrees then return false end
+    local now = tick()
+    if not isManual and (now - lastTreeCycleCheck < 30) then return false end
+    lastTreeCycleCheck = now
+    isExecutingTreeCycle = true
+
+    local s, err = pcall(function()
+        local cd = CachedData or getgenv().CachedData or {}
+        local trees = cd.trees or {}
+        local currentTreeCount = 0
+        for _ in pairs(trees) do
+            currentTreeCount = currentTreeCount + 1
+        end
+        local maxTrees = (Config.Orchard and Config.Orchard.MaxTrees) or 9
+
+        -- PHASE 1: Plant any saplings already in bag
+        local saplings = cd.saplings or {}
+        local anySaplingsInBag = false
+        for _, count in pairs(saplings) do
+            if (tonumber(count) or 0) > 0 then
+                anySaplingsInBag = true
+                break
+            end
+        end
+
+        if anySaplingsInBag and (isManual or S.autoPlantTrees or S.autoBuyTrees) then
+            local treeOrder = { "StarFruit", "Coconut", "Mango", "Orange", "Apple" }
+            for _, tId in ipairs(treeOrder) do
+                local haveCount = tonumber(saplings[tId]) or 0
+                while haveCount > 0 and currentTreeCount < maxTrees and getgenv().BG_Running do
+                    local spot = getFreeTreeSpot()
+                    if not spot then break end
+
+                    -- Must be at farm to plant!
+                    local farmCenter = getMyPlotCenter()
+                    local root = getHRP()
+                    if farmCenter and root and (root.Position - farmCenter).Magnitude > 35 then
+                        invoke(R.QuickWarp, "Farm")
+                        task.wait(0.6)
+                    end
+
+                    local ok, msg = invoke(R.FarmAction, "treePlace", tId, spot)
+                    if ok then
+                        haveCount = haveCount - 1
+                        saplings[tId] = haveCount
+                        currentTreeCount = currentTreeCount + 1
+                        trees["t_" .. tick()] = { id = tId, x = spot.x, z = spot.z }
+                        cd.trees = trees
+                        logActivity(string.format("🌳 Planted %s tree in Orchard! (%d/%d trees)", tId, currentTreeCount, maxTrees), "Orchard")
+                        notify("Orchard", string.format("ปลูกต้น %s สำเร็จ! (%d/%d ต้น)", tId, currentTreeCount, maxTrees))
+                        task.wait(0.4)
+                    else
+                        break
+                    end
+                end
+            end
+        end
+
+        -- PHASE 2: Auto Buy Saplings at Seed Shop (if room available < maxTrees)
+        if (isManual or S.autoBuyTrees) and currentTreeCount < maxTrees then
+            local myCoins = tonumber(cd.coins) or 0
+            local myFarmLevel = tonumber(cd.farmLevel) or 1
+            local treeDefs = Config.Orchard and Config.Orchard.Trees or {}
+            local buyOrder = { "StarFruit", "Coconut", "Mango", "Orange", "Apple" }
+
+            local chosenTreeId = nil
+            for _, tId in ipairs(buyOrder) do
+                local isSelected = true
+                if S.selectedTreesToBuy and next(S.selectedTreesToBuy) ~= nil then
+                    isSelected = S.selectedTreesToBuy[tId] == true
+                end
+                local def = treeDefs[tId]
+                if isSelected and def then
+                    if myFarmLevel >= (def.level or 1) and myCoins >= (def.price or 0) then
+                        chosenTreeId = tId
+                        break -- Most expensive affordable tree first!
+                    end
+                end
+            end
+
+            if chosenTreeId then
+                local def = treeDefs[chosenTreeId]
+                local spot = getFreeTreeSpot()
+                if spot then
+                    logActivity(string.format("Buying %s Sapling (%d coins)...", chosenTreeId, def.price), "Seed Shop")
+                    
+                    -- Open Seed Shop Pad & Proximity Prompt
+                    local shopPad = workspace:FindFirstChild("ShopPad", true)
+                    local prompt = shopPad and shopPad:FindFirstChildWhichIsA("ProximityPrompt", true)
+                    local root = getHRP()
+                    if root then
+                        root.CFrame = CFrame.new(POS.SEED_SHOP)
+                        task.wait(0.4)
+                        if prompt and fireproximityprompt then
+                            pcall(function() fireproximityprompt(prompt, 0) end)
+                            task.wait(0.3)
+                        end
+                    end
+
+                    local bOk, bMsg = invoke(R.FarmAction, "treeBuy", chosenTreeId, 1)
+                    if bOk then
+                        cd.coins = myCoins - def.price
+                        logActivity(string.format("🌳 Bought %s Sapling! Teleporting to farm to plant...", chosenTreeId), "Orchard")
+                        notify("Orchard", string.format("ซื้อต้นกล้า %s สำเร็จ! กำลังไปปลูก...", def.name or chosenTreeId))
+                        task.wait(0.4)
+
+                        -- Warp to Farm and plant it immediately!
+                        invoke(R.QuickWarp, "Farm")
+                        task.wait(0.6)
+                        local pOk, pMsg = invoke(R.FarmAction, "treePlace", chosenTreeId, spot)
+                        if pOk then
+                            currentTreeCount = currentTreeCount + 1
+                            trees["t_" .. tick()] = { id = chosenTreeId, x = spot.x, z = spot.z }
+                            cd.trees = trees
+                            logActivity(string.format("🌳 Planted %s tree in Orchard! (%d/%d trees)", chosenTreeId, currentTreeCount, maxTrees), "Orchard")
+                            notify("Orchard", string.format("ปลูกต้น %s สำเร็จ! (%d/%d ต้น)", def.name or chosenTreeId, currentTreeCount, maxTrees))
+                        end
+                    elseif isManual then
+                        notify("Orchard", "ไม่สามารถซื้อต้นกล้าได้: " .. tostring(bMsg or ""))
+                    end
+                end
+            elseif isManual then
+                notify("Orchard", "เหรียญไม่พอสำหรับซื้อต้นไม้ผลที่เลือก!")
+            end
+        elseif isManual and currentTreeCount >= maxTrees then
+            notify("Orchard", string.format("สวนผลไม้เต็มแล้ว (%d/%d ต้น)!", currentTreeCount, maxTrees))
+        end
+    end)
+
+    isExecutingTreeCycle = false
+    return s
 end
 
 -- ==============================================================================
@@ -1869,14 +2206,56 @@ local isRefiningProduce = false
 doRefineAllProduce = function(force)
     if isRefiningProduce then return end
     if not force and not S.autoRefineProduce then return end
-    isRefiningProduce = true
 
-    local ok, msg = invoke(R.RefineProduce, { produce = "all" })
-    local msgStr = (type(msg) == "string" and msg) or (ok and "Refined produce into Essence!" or "No refinable produce")
-    if ok or force then
-        notify("Alchemy Tower", msgStr)
-        logActivity("Alchemy: " .. msgStr, "Farm Plot")
+    local cd = CachedData or getgenv().CachedData or {}
+    local p = cd.produce or {}
+    local hwCrops = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
+
+    -- Build dictionary of normal refinable produce (STRICTLY EXCLUDE Halloween crops!)
+    local toRefine = {}
+    local totalRefineCount = 0
+    for cropId, count in pairs(p) do
+        local n = tonumber(count) or 0
+        local baseCrop = tostring(cropId):match("^([^:]+)") or tostring(cropId)
+        if n > 0 and not hwCrops[baseCrop] then
+            toRefine[cropId] = n
+            totalRefineCount = totalRefineCount + n
+        end
     end
+
+    if totalRefineCount <= 0 then
+        if force then notify("Alchemy Tower", "ไม่มีผลผลิตธรรมดาสำหรับสกัด Essence!") end
+        return
+    end
+
+    isRefiningProduce = true
+    pcall(function()
+        local root = getHRP()
+        local prevCF = root and root.CFrame
+
+        -- Stand at Alchemy Tower ShopPad
+        if root then
+            root.CFrame = CFrame.new(81.4, 10.5, -37)
+            task.wait(0.35)
+        end
+
+        local ok, msg = invoke(R.RefineProduce, { produce = toRefine })
+        local msgStr = (type(msg) == "string" and msg) or (ok and string.format("สกัดผลผลิต %d ชิ้นเป็น Essence สำเร็จ!", totalRefineCount) or "สกัดผลผลิตไม่สำเร็จ")
+        notify("Alchemy Tower", msgStr)
+        logActivity("Alchemy: " .. msgStr, "Town")
+
+        -- Return to previous position or farm
+        task.wait(0.3)
+        if S.autoFarm then
+            local center = getMyPlotCenter()
+            root = getHRP()
+            if center and root then root.CFrame = CFrame.new(center + Vector3.new(0, 1.8, 0)) end
+        elseif prevCF then
+            root = getHRP()
+            if root then root.CFrame = prevCF end
+        end
+    end)
+
     isRefiningProduce = false
 end
 
@@ -1895,15 +2274,15 @@ local function doBuyEggCycle(force)
         -- Collect list of eggs to buy
         local eggsToBuy = {}
         if S.selectedEggsToBuy and next(S.selectedEggsToBuy) ~= nil then
-            for eggKey, enabled in pairs(S.selectedEggsToBuy) do
-                if enabled then
-                    local cleanEggId = eggKey:match("^([%w_]+)") or eggKey
+            for _, item in ipairs(parseMultiDropdown(S.selectedEggsToBuy)) do
+                local cleanEggId = tostring(item):match("^([%w_]+)") or tostring(item)
+                if cleanEggId and cleanEggId ~= "" then
                     table.insert(eggsToBuy, cleanEggId)
                 end
             end
         else
             local targetEgg = S.buyEggType or S.hatchEggType or "BasicEgg"
-            local cleanEggId = targetEgg:match("^([%w_]+)") or targetEgg
+            local cleanEggId = tostring(targetEgg):match("^([%w_]+)") or tostring(targetEgg)
             table.insert(eggsToBuy, cleanEggId)
         end
 
@@ -1936,7 +2315,7 @@ local function doBuyEggCycle(force)
 
         -- Warp to Hatchery ShopPad (Required by game server)
         if root then
-            root.CFrame = CFrame.new(POS_HATCHERY_PAD)
+            root.CFrame = CFrame.new(POS.HATCHERY_PAD)
             task.wait(0.35)
         end
 
@@ -1981,9 +2360,9 @@ local function doFillIncubatorCycle(force)
         local eggBag = getgenv().CachedData and getgenv().CachedData.eggBag or {}
         local eggsToPlace = {}
         if S.selectedEggsToPlace and next(S.selectedEggsToPlace) ~= nil then
-            for eggId, isSel in pairs(S.selectedEggsToPlace) do
-                if isSel then
-                    local cleanEggId = eggId:match("^([%w_]+)") or eggId
+            for _, item in ipairs(parseMultiDropdown(S.selectedEggsToPlace)) do
+                local cleanEggId = tostring(item):match("^([%w_]+)") or tostring(item)
+                if cleanEggId and cleanEggId ~= "" then
                     table.insert(eggsToPlace, cleanEggId)
                 end
             end
@@ -1991,20 +2370,25 @@ local function doFillIncubatorCycle(force)
             table.insert(eggsToPlace, "BasicEgg")
         end
 
-        for slot = 1, 5 do
-            if not S.autoFillIncubator and not force then break end
+        local maxNests = (Config and Config.MaxNestsFor and Config.MaxNestsFor({ houseTier = cd.houseTier, passes = cd.passes })) or 5
+        local occupied = #(cd.nests or {})
+        local emptyNests = math.max(0, maxNests - occupied)
+
+        if emptyNests > 0 then
             for _, eggId in ipairs(eggsToPlace) do
-                local count = eggBag[eggId] or 0
-                if count > 0 or force then
-                    local ok, res = invoke(R.EggAction, "fill", eggId, slot)
+                if not S.autoFillIncubator and not force then break end
+                local count = tonumber(eggBag[eggId]) or 0
+                if count > 0 then
+                    local toFill = math.min(emptyNests, count)
+                    local ok, res = invoke(R.EggAction, "fill", eggId, toFill)
                     if ok then
-                        eggBag[eggId] = math.max(0, count - 1)
-                        task.wait(0.4)
-                        break
+                        eggBag[eggId] = math.max(0, count - toFill)
+                        emptyNests = emptyNests - toFill
+                        task.wait(0.3)
+                        if emptyNests <= 0 then break end
                     end
                 end
             end
-            task.wait(0.35)
         end
     end)
 
@@ -2053,10 +2437,12 @@ doPenFeedCycle = function(force)
 
             if neededFd > 10 then
                 local feedable = {}
+                local hwCropNames = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
                 for cropId, count in pairs(produce) do
                     local n = tonumber(count) or 0
-                    if n > 0 then
+                    if n > 0 and not hwCropNames[cropId] then
                         local cDef = Config and Config.Crops and Config.Crops[cropId]
+                        if not (cDef and cDef.hw) then
                         local rarity = cDef and cDef.rarity or "Common"
                         local price = (cDef and cDef.sellPrice) or 0
                         local foodAmt, expAmt, isFav = 15, 3, false
@@ -2082,6 +2468,7 @@ doPenFeedCycle = function(force)
                                 fav = isFav or false,
                                 price = price
                             })
+                        end
                         end
                     end
                 end
@@ -2132,10 +2519,22 @@ end
 -- ==============================================================================
 -- 🃏 CARD GACHA ENGINE (WARP TO CARD SHRINE -> BUY TICKET -> PULL 10X -> RETURN)
 -- ==============================================================================
+local function canPullAnyCards()
+    local cd = CachedData or getgenv().CachedData or {}
+    local tickets = tonumber(cd.cardTickets) or 0
+    if tickets > 0 then return true end
+    if S.autoBuyCardTicket then
+        local myCoins = tonumber(cd.coins) or 0
+        if myCoins >= 2500 then return true end
+    end
+    return false
+end
+
 local isPullingCards = false
 doCardPullCycle = function(force)
     if isPullingCards then return end
     if not force and not S.autoCardPull then return end
+    if not force and not canPullAnyCards() then return end
     isPullingCards = true
 
     local root = getHRP()
@@ -2144,7 +2543,7 @@ doCardPullCycle = function(force)
     local prevCF = root.CFrame
 
     logActivity("Warping to Card Shrine...", "Card Shop")
-    root.CFrame = CFrame.new(POS_CARD_SHOP)
+    root.CFrame = CFrame.new(POS.CARD_SHOP)
     task.wait(0.4)
 
     if S.autoBuyCardTicket then
@@ -2209,17 +2608,31 @@ local function getSellableProduceCount(sellMode)
     sellMode = sellMode or S.sellMode or "ALL"
     local total = 0
     local cd = CachedData or getgenv().CachedData or {}
+    local hwCrops = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
 
-    -- 1. Normal Produce
+    -- 1. Normal Bed Produce (Strictly exclude Halloween event crops - they are sold at Witch Stall!)
     if sellMode ~= "MUTANT" and cd.produce and type(cd.produce) == "table" then
-        for _, count in pairs(cd.produce) do
-            total = total + (tonumber(count) or 0)
+        for crop, count in pairs(cd.produce) do
+            local baseCrop = tostring(crop):match("^([^:]+)") or tostring(crop)
+            if not hwCrops[baseCrop] then
+                total = total + (tonumber(count) or 0)
+            end
         end
     end
 
-    -- 2. Mutant Produce (sold when sellMode == "ALL" or "MUTANT")
+    -- 2. Mutant Produce (Strictly exclude Halloween event mutant crops as well!)
     if (sellMode == "ALL" or sellMode == "MUTANT") and cd.mutant and type(cd.mutant) == "table" then
-        for _, count in pairs(cd.mutant) do
+        for cropKey, count in pairs(cd.mutant) do
+            local baseCrop = tostring(cropKey):match("^([^:]+)") or tostring(cropKey)
+            if not hwCrops[baseCrop] then
+                total = total + (tonumber(count) or 0)
+            end
+        end
+    end
+
+    -- 3. Orchard Tree Fruits (Apples, Oranges, etc. - sold at Market!)
+    if sellMode ~= "MUTANT" and cd.fruit and type(cd.fruit) == "table" then
+        for _, count in pairs(cd.fruit) do
             total = total + (tonumber(count) or 0)
         end
     end
@@ -2453,8 +2866,8 @@ local function warpToZoneSafely(zoneNum)
     local campZ = zoneCampZ[num] or -158
     local campPos = zoneCampPositions[num] or Vector3.new(0, 5, campZ)
 
-    -- If already in zone: Must be past Town NorthGate (Z <= -130) and within 85 studs of zone camp
-    if root.Position.Z <= -130 and math.abs(root.Position.Z - campZ) < 85 then
+    -- If already in zone: Must be past Town NorthGate (Z <= -130) and within 150 studs of zone camp
+    if root.Position.Z <= -130 and math.abs(root.Position.Z - campZ) < 150 then
         return true
     end
 
@@ -2465,7 +2878,7 @@ local function warpToZoneSafely(zoneNum)
     end
 
     -- 1. Direct teleport to Town Warp Pad
-    root.CFrame = CFrame.new(POS_TOWN_WARP)
+    root.CFrame = CFrame.new(POS.TOWN_WARP)
     task.wait(0.2)
 
     -- 2. Fire Warp Prompt if present
@@ -2482,7 +2895,7 @@ local function warpToZoneSafely(zoneNum)
 
     -- 4. Fallback Verification: Ensure character actually made it to the target zone
     root = getHRP()
-    if root and (root.Position.Z > -130 or math.abs(root.Position.Z - campZ) > 85) then
+    if root and (root.Position.Z > -130 or math.abs(root.Position.Z - campZ) > 150) then
         root.CFrame = CFrame.new(campPos)
         task.wait(0.25)
     end
@@ -2563,7 +2976,9 @@ function serverHop()
             queue_teleport([[
                 repeat task.wait() until game:IsLoaded()
                 task.wait(2)
-                if isfile and isfile("]] .. scriptPath .. [[") then
+                if isfile and isfile("BeastGarden_Hub.lua") then
+                    loadfile("BeastGarden_Hub.lua")()
+                elseif isfile and isfile("]] .. scriptPath .. [[") then
                     loadfile("]] .. scriptPath .. [[")()
                 end
             ]])
@@ -2607,19 +3022,28 @@ end
 -- 📜 COMPREHENSIVE QUEST ENGINE: MAIN QUEST & ZONE/DAILY QUEST AUTOMATION
 -- ==============================================================================
 
+local lastMerchantVisit = 0
+local lastQuestClaimDebounce = {}
+local activeQuestHuntingZone = nil
+local lastActiveZoneWarpTick = 0
+
 -- Helper: Open Traveling Merchant (Quest NPC) & ProximityPrompt
 local function openQuestMerchant()
     local root = getHRP()
     if root then
-        root.CFrame = CFrame.new(POS_QUEST_NPC)
-        task.wait(0.4)
+        root.CFrame = CFrame.new(POS.QUEST_NPC)
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+        task.wait(0.5)
     end
 
     local npc = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("QuestNPCs") and workspace.Map.QuestNPCs:FindFirstChild("QuestNPC_Z0")
     local prompt = npc and npc:FindFirstChild("Body") and npc.Body:FindFirstChildWhichIsA("ProximityPrompt")
     if prompt then
         pcall(fireproximityprompt, prompt)
-        task.wait(0.35)
+        task.wait(0.4)
     end
 end
 
@@ -2651,10 +3075,6 @@ local function getQuestTargetMob(def)
     return def.monster or def.mob or def.target or def.monsterId or def.id
 end
 
--- Helper: Auto-Claim & Auto-Accept Zone Quests (Hub + Zones 1..9)
-local lastMerchantVisit = 0
-local lastQuestClaimDebounce = {}
-
 local function closeQuestUI()
     pcall(function()
         local qp = plr.PlayerGui:FindFirstChild("QuestPanels")
@@ -2664,6 +3084,26 @@ local function closeQuestUI()
     pcall(function()
         plr:SetAttribute("HudOpen", "")
     end)
+end
+
+local function isQuestZoneAllowed(zoneNum)
+    if not S.autoZoneQuests then return false end
+    zoneNum = tonumber(zoneNum)
+    if not zoneNum then return false end
+
+    local mode = S.questZoneMode or "Selected Zones (เลือกตามรายชื่อด้านล่าง)"
+    if mode:find("Current Warp") then
+        return zoneNum == (S.warpZone or 1) or zoneNum == 0
+    elseif mode:find("All Zones") then
+        return true
+    end
+
+    if S.selectedQuestZones then
+        return S.selectedQuestZones[zoneNum] == true 
+            or S.selectedQuestZones[tostring(zoneNum)] == true 
+            or S.selectedQuestZones["Z" .. zoneNum] == true
+    end
+    return true
 end
 
 local function processZoneQuests(targetZoneToAccept, mode)
@@ -2695,19 +3135,47 @@ local function processZoneQuests(targetZoneToAccept, mode)
 
         if isReady then
             logActivity(string.format("Claiming Zone %d Quest", zoneNum), "Town")
-            invoke(R.QuestAction, zoneNum, "claim")
+            local ok, success = pcall(function()
+                return invoke(R.QuestAction, zoneNum, "claim")
+            end)
             lastQuestClaimDebounce[zoneNum] = tick()
             if claimBtn then pcall(firesignal, claimBtn.Activated) end
-            if zInfo then
-                zInfo.on = false
-                zInfo.p = 0 -- Reset progress immediately to stop claim loop!
+
+            if ok and success then
+                if zInfo then
+                    zInfo.on = false
+                    zInfo.p = 0
+                end
+                claimedAny = true
+                task.wait(0.3)
+            else
+                -- Proximity retry: Reposition right at NPC body and re-invoke
+                local npc = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("QuestNPCs") and workspace.Map.QuestNPCs:FindFirstChild("QuestNPC_Z0")
+                local root = getHRP()
+                if root and npc then
+                    root.CFrame = npc:GetPivot() + Vector3.new(0, 0, 3)
+                    pcall(function()
+                        root.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                    task.wait(0.4)
+                    local prompt = npc:FindFirstChild("Body") and npc.Body:FindFirstChildWhichIsA("ProximityPrompt")
+                    if prompt then pcall(fireproximityprompt, prompt) end
+                    task.wait(0.35)
+                    local ok2, s2 = pcall(function() return invoke(R.QuestAction, zoneNum, "claim") end)
+                    if ok2 and s2 then
+                        if zInfo then
+                            zInfo.on = false
+                            zInfo.p = 0
+                        end
+                        claimedAny = true
+                    end
+                end
+                task.wait(0.3)
             end
-            claimedAny = true
-            task.wait(0.3)
         end
     end
 
-    -- 2. ACCEPT QUESTS
+    -- 2. ACCEPT QUESTS (ONLY FOR UNLOCKED ZONES!)
     if mode == "all" or mode == "accept_all" then
         local activeCount = 0
         for zn = 0, 9 do
@@ -2727,6 +3195,12 @@ local function processZoneQuests(targetZoneToAccept, mode)
 
             for _, zoneNum in ipairs(zonesToTry) do
                 if activeCount >= maxActive then break end
+                if not isQuestZoneAllowed(zoneNum) then continue end
+                -- Do NOT attempt locked zones!
+                local cd = getgenv().CachedData
+                local isUnlocked = (zoneNum == 0) or (cd and cd.warps and cd.warps["Z" .. zoneNum] == true)
+                if not isUnlocked then continue end
+
                 local zKey = "Z" .. zoneNum
                 local zInfo = zqData[zKey]
                 local acceptBtn = qFrame and qFrame:FindFirstChild("Accept_" .. zoneNum, true)
@@ -2751,13 +3225,15 @@ local function processZoneQuests(targetZoneToAccept, mode)
         end
     elseif targetZoneToAccept ~= nil then
         local zoneNum = tonumber(targetZoneToAccept)
-        if zoneNum then
+        if zoneNum and isQuestZoneAllowed(zoneNum) then
             local acceptBtn = qFrame and qFrame:FindFirstChild("Accept_" .. zoneNum, true)
             logActivity(string.format("Accepting Target Zone %d Quest", zoneNum), "Town")
-            invoke(R.QuestAction, zoneNum, "accept")
+            local ok, success = pcall(function()
+                return invoke(R.QuestAction, zoneNum, "accept")
+            end)
             if acceptBtn then pcall(firesignal, acceptBtn.Activated) end
             local zInfo = zqData["Z" .. zoneNum]
-            if zInfo then
+            if zInfo and ok and success then
                 zInfo.on = true
                 zInfo.p = 0
             end
@@ -2772,30 +3248,36 @@ local function processZoneQuests(targetZoneToAccept, mode)
     -- 3. RESUME FARMING OR HUNTING (DO NOT REMAIN STUCK AT NPC!)
     local nextMonsterZone = nil
     for zn = 1, 9 do
-        local zi = zqData["Z" .. zn]
-        if zi and zi.on then
-            local def = getZoneQuestDef(zn, zi.i)
-            local need = getQuestTargetNeed(def)
-            if (zi.p or 0) < need then
-                nextMonsterZone = zn
-                break
+        if isQuestZoneAllowed(zn) then
+            local zi = zqData["Z" .. zn]
+            if zi and zi.on then
+                local def = getZoneQuestDef(zn, zi.i)
+                local need = getQuestTargetNeed(def)
+                if (zi.p or 0) < need then
+                    nextMonsterZone = zn
+                    break
+                end
             end
         end
     end
 
     if nextMonsterZone then
+        activeQuestHuntingZone = nextMonsterZone
         logActivity(string.format("Quest Accepted! Warping to Zone %d to hunt...", nextMonsterZone), "Quest")
         warpToZoneSafely(nextMonsterZone)
     elseif S.autoFarmMobs and S.warpZone then
+        activeQuestHuntingZone = nil
         logActivity(string.format("Resuming Mob Farm: Warping to Zone %d...", S.warpZone), "Combat")
         warpToZoneSafely(S.warpZone)
     elseif S.autoFarm then
+        activeQuestHuntingZone = nil
         logActivity("Resuming Crop Farm: Returning to Farm...", "Farm Plot")
         invoke(R.QuickWarp, "Farm")
         lastFarmTime = 0
         task.wait(0.4)
         task.spawn(doRealFarmCycle)
     else
+        activeQuestHuntingZone = nil
         invoke(R.QuickWarp, "Farm")
     end
 end
@@ -2804,7 +3286,7 @@ end
 local function doDailyQuestCycle()
     local cd = getgenv().CachedData
     if cd and cd.quests then
-        if type(cd.quests.list) == "table" then
+        if S.autoDailyQuests and type(cd.quests.list) == "table" then
             for i, q in ipairs(cd.quests.list) do
                 if q.w == true or (q.done == true and not q.claimed) then
                     logActivity(string.format("Claiming Daily Quest #%d (%s)", i, tostring(q.id)), "Quests")
@@ -2814,18 +3296,20 @@ local function doDailyQuestCycle()
             end
         end
 
-        if cd.quests.bonus == true or cd.quests.bw == true then
+        if S.autoDailyLogin and (cd.quests.bonus == true or cd.quests.bw == true) then
             logActivity("Claiming Daily Bonus Box", "Quests")
             invoke(R.DailyAction, "bonus")
             task.wait(0.2)
         end
     end
 
-    pcall(function()
-        invoke(R.DailyAction, "login")
-    end)
+    if S.autoDailyLogin then
+        pcall(function()
+            invoke(R.DailyAction, "login")
+        end)
+    end
 
-    if cd and type(cd.weekly) == "table" then
+    if S.autoWeeklyQuests and cd and type(cd.weekly) == "table" then
         for i, w in ipairs(cd.weekly) do
             if w.w == true or w.done == true then
                 invoke(R.DailyAction, "weekly", i)
@@ -2847,9 +3331,11 @@ local function doUnifiedQuestCycle()
         doDailyQuestCycle()
         task.wait(0.3)
 
-        -- 2. Zone Quests (Claim all completed, Accept all available)
-        processZoneQuests(nil, "all")
-        notify("Quest", "Processed all daily & zone quests.")
+        -- 2. Zone Quests (Claim all completed, Accept selected)
+        if S.autoZoneQuests then
+            processZoneQuests(nil, "all")
+            notify("Quest", "Processed selected zone quests.")
+        end
     end)
 
     if not s and err then
@@ -2868,24 +3354,26 @@ local function doActiveZoneQuestStep()
     local zqData = getgenv().CachedData and getgenv().CachedData.zq or {}
 
     -- 1. Check if ANY active quest is finished and ready to claim
-    local hasClaimable = false
+    local claimableZone = nil
     local now = tick()
     for zoneNum = 0, 9 do
         local zKey = "Z" .. zoneNum
         local zInfo = zqData[zKey]
-        if zInfo and zInfo.on and (now - (lastQuestClaimDebounce[zoneNum] or 0) > 6) then
+        if zInfo and zInfo.on and (now - (lastQuestClaimDebounce[zoneNum] or 0) > 15) then
             local def = getZoneQuestDef(zoneNum, zInfo.i)
             local need = getQuestTargetNeed(def)
             if (zInfo.p or 0) >= need then
-                hasClaimable = true
+                claimableZone = zoneNum
                 break
             end
         end
     end
 
-    if hasClaimable then
+    -- If a quest is finished, warp to Wandering Merchant ONCE to claim & accept next
+    if claimableZone ~= nil then
         isExecutingQuest = true
-        logActivity("Active Quest completed! Warping to Wandering Merchant to claim...", "Town")
+        activeQuestHuntingZone = nil
+        logActivity(string.format("Active Zone %d Quest completed! Warping to Wandering Merchant to claim...", claimableZone), "Town")
         processZoneQuests(nil, "all")
         isExecutingQuest = false
         return true
@@ -2894,50 +3382,54 @@ local function doActiveZoneQuestStep()
     -- 2. Check for active Monster Quests (Zone 1..9)
     local pendingMonsterQuest = nil
     for zoneNum = 1, 9 do
-        local zKey = "Z" .. zoneNum
-        local zInfo = zqData[zKey]
-        if zInfo and zInfo.on then
-            local def = getZoneQuestDef(zoneNum, zInfo.i)
-            local need = getQuestTargetNeed(def)
-            if (zInfo.p or 0) < need then
-                pendingMonsterQuest = {
-                    zone = zoneNum,
-                    info = zInfo,
-                    def = def,
-                    need = need,
-                    cur = zInfo.p or 0
-                }
-                break
+        if isQuestZoneAllowed(zoneNum) then
+            local zKey = "Z" .. zoneNum
+            local zInfo = zqData[zKey]
+            if zInfo and zInfo.on then
+                local def = getZoneQuestDef(zoneNum, zInfo.i)
+                local need = getQuestTargetNeed(def)
+                if (zInfo.p or 0) < need then
+                    pendingMonsterQuest = {
+                        zone = zoneNum,
+                        info = zInfo,
+                        def = def,
+                        need = need,
+                        cur = zInfo.p or 0
+                    }
+                    break
+                end
             end
         end
     end
 
     -- 3. Check for active Farm Quest (Zone 0)
     local pendingFarmQuest = nil
-    local z0Info = zqData["Z0"]
-    if z0Info and z0Info.on then
-        local def = getZoneQuestDef(0, z0Info.i)
-        local need = getQuestTargetNeed(def)
-        if (z0Info.p or 0) < need then
-            pendingFarmQuest = {
-                zone = 0,
-                info = z0Info,
-                def = def,
-                need = need,
-                cur = z0Info.p or 0
-            }
+    if isQuestZoneAllowed(0) then
+        local z0Info = zqData["Z0"]
+        if z0Info and z0Info.on then
+            local def = getZoneQuestDef(0, z0Info.i)
+            local need = getQuestTargetNeed(def)
+            if (z0Info.p or 0) < need then
+                pendingFarmQuest = {
+                    zone = 0,
+                    info = z0Info,
+                    def = def,
+                    need = need,
+                    cur = z0Info.p or 0
+                }
+            end
         end
     end
 
-    -- If no quest is active at all, go visit merchant with cooldown!
+    -- If no quest is active at all, only visit merchant with a safe, long cooldown (120s)
     if not pendingMonsterQuest and not pendingFarmQuest then
+        activeQuestHuntingZone = nil
         local now = tick()
-        if now - lastMerchantVisit >= 45 then
+        if now - lastMerchantVisit >= 120 then
             lastMerchantVisit = now
             isExecutingQuest = true
             processZoneQuests(nil, "all")
             isExecutingQuest = false
-            -- Return false so the main loop continues mob/crop farming immediately!
             return false
         end
         return false
@@ -2945,13 +3437,23 @@ local function doActiveZoneQuestStep()
 
     isExecutingQuest = true
 
-    -- Priority A: Execute Monster Quest in Zone 1..9 (Warp to zone, kill target monster)
+    -- Priority A: Execute Monster Quest in Zone 1..9 (STAY FIRMLY IN ZONE UNTIL OBJECTIVE IS FINISHED!)
     if pendingMonsterQuest then
         local zNum = pendingMonsterQuest.zone
         local def = pendingMonsterQuest.def
         local targetMob = getQuestTargetMob(def)
+        activeQuestHuntingZone = zNum
 
-        warpToZoneSafely(zNum)
+        -- Ensure we are in the target zone: ONLY warp if not already in zone!
+        local root = getHRP()
+        local campZ = zoneCampZ[zNum] or -158
+        local isAlreadyInZone = root and (root.Position.Z <= -130 and math.abs(root.Position.Z - campZ) < 150)
+
+        if root and not isAlreadyInZone and (tick() - lastActiveZoneWarpTick > 8) then
+            lastActiveZoneWarpTick = tick()
+            logActivity(string.format("Quest Hunting: Warping to Zone %d (%d/%d)...", zNum, pendingMonsterQuest.cur, pendingMonsterQuest.need), "Zone " .. zNum)
+            warpToZoneSafely(zNum)
+        end
 
         local target = getBestTargetMonster(zNum, targetMob)
         if target and target.part and not target.model:GetAttribute("DiedAt") then
@@ -2974,6 +3476,7 @@ local function doActiveZoneQuestStep()
 
     -- Priority B: Execute Farm Quest (Zone 0)
     if pendingFarmQuest then
+        activeQuestHuntingZone = 0
         local def = pendingFarmQuest.def
         local kind = def and def.kind or "harvest"
         if kind == "harvest" or kind == "plant" then
@@ -3016,7 +3519,7 @@ local function doColosseumStep(isManual)
         -- 2. Warp to Colosseum Board Pad
         local root = getHRP()
         if root then
-            moveToCFrame(CFrame.new(POS_ARENA_BOARD + Vector3.new(0, 1.5, 0)))
+            moveToCFrame(CFrame.new(POS.ARENA_BOARD + Vector3.new(0, 1.5, 0)))
             task.wait(0.4)
         end
 
@@ -3075,6 +3578,19 @@ local function getActiveSprinklerRemaining()
         end
     end
     return nil, 0
+end
+
+local function getSprinklerStatusString()
+    local activeType, remSecs = getActiveSprinklerRemaining()
+    local thresh = (S and S.sprinklerThresholdMinutes) or 30
+    if activeType and remSecs and remSecs > 0 then
+        local m = math.floor(remSecs / 60)
+        local s = math.floor(remSecs % 60)
+        local statusNotice = (remSecs < thresh * 60) and " (พร้อมต่อเวลา stack +1 รอบ)" or " (เวลาเพียงพอ)"
+        return string.format("💧 สปริงเกลอร์ที่ทำงาน: %s\n⏱️ เวลาคงเหลือ: %02d:%02d นาที\n🎯 ตั้งค่าเกณฑ์ต่อเวลา: น้อยกว่า %d นาที%s", activeType, m, s, thresh, statusNotice)
+    else
+        return string.format("💧 สปริงเกลอร์: ยังไม่ได้เปิดใช้งาน\n🎯 เกณฑ์ต่อเวลา: ทำงานทันทีเมื่อเวลาน้อยกว่า %d นาที", thresh)
+    end
 end
 
 local function getSprinklerInventoryCount(sprinklerType)
@@ -3150,22 +3666,26 @@ local function buySprinklersBatchAtShop(itemsToBuy, isManual)
 
     logActivity(string.format("Stock available! Warping to Seed Shop (Buying %d sprinkler types)...", #itemsToBuy), "Watering")
 
-    -- 1. Must TP to Seed Shop first before calling remote!
-    invoke(R.QuickWarp, "SeedShop")
-    task.wait(0.4)
-    root = getHRP()
-    if root then
-        root.CFrame = CFrame.new(POS_SEED_SHOP)
+    -- 1. Must TP to Seed Shop Pad and trigger ShopPrompt first! (Required by server!)
+    root.CFrame = CFrame.new(POS.SEED_SHOP)
+    task.wait(0.35)
+    local shopPad = workspace:FindFirstChild("ShopPad", true)
+    local prompt = shopPad and shopPad:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Enabled and fireproximityprompt then
+        pcall(function() fireproximityprompt(prompt, 0) end)
+        task.wait(0.25)
     end
-    task.wait(0.4)
 
     local anyBought = false
     local summary = {}
+    local cd = CachedData or getgenv().CachedData or {}
 
     for _, it in ipairs(itemsToBuy) do
-        local ok, res, msg = invoke(R.FarmAction, "gearBuy", it.type, it.buyCount)
-        if ok and res then
+        local ok, res, msg = pcall(function() return R.FarmAction:InvokeServer("gearBuy", it.type, it.buyCount) end)
+        if ok and res ~= false then
             anyBought = true
+            cd.gear = cd.gear or {}
+            cd.gear[it.type] = (tonumber(cd.gear[it.type]) or 0) + it.buyCount
             table.insert(summary, string.format("%s x%d", it.name or it.type, it.buyCount))
         end
         task.wait(0.3)
@@ -3228,19 +3748,22 @@ local function doWateringSprinklerStep(isManual)
         -- 2. AUTO WATER CROPS (Activate Best Available Sprinkler at Farm)
         if S.autoWaterSprinkler or isManual then
             local activeType, remSecs = getActiveSprinklerRemaining()
-            if activeType and remSecs > 15 and not isManual then
-                -- Already active and watering
+            local threshSecs = (S.sprinklerThresholdMinutes or 30) * 60
+            local preferredType = S.sprinklerType or "Rainbow"
+            local prefCount = getSprinklerInventoryCount(preferredType)
+            local isSwitchingType = (activeType and activeType ~= preferredType and prefCount > 0)
+
+            -- If active, same type, and remaining time is still above threshold, do NOT stack yet (unless manual trigger or switching tier)
+            if activeType and not isSwitchingType and remSecs >= threshSecs and not isManual then
                 return
             end
 
-            -- Find best available sprinkler in bag matching user preference or fallback
-            local preferredType = S.sprinklerType or "Rainbow"
+            -- Determine which sprinkler to place
             local chosenType = nil
-
-            if getSprinklerInventoryCount(preferredType) > 0 then
+            if prefCount > 0 then
                 chosenType = preferredType
-            else
-                -- Fallback to highest tier available in bag
+            elseif not isManual then
+                -- In automation mode, fallback to highest available sprinkler in bag
                 for _, t in ipairs({"Rainbow", "Gold", "Big", "Basic"}) do
                     if getSprinklerInventoryCount(t) > 0 then
                         chosenType = t
@@ -3250,14 +3773,36 @@ local function doWateringSprinklerStep(isManual)
             end
 
             if chosenType then
-                invoke(R.QuickWarp, "Farm")
-                task.wait(0.5)
+                local def = Config.Sprinklers and Config.Sprinklers.Types and Config.Sprinklers.Types[chosenType]
+                local dur = (def and def.dur) or 600
+                local maxStack = (Config.Sprinklers and Config.Sprinklers.MaxStack) or 3600
+                if not isSwitchingType and remSecs + dur > maxStack and remSecs > 0 and not isManual then
+                    -- Stacking right now would exceed MaxStack cap (60m), wait until more time elapses
+                    return
+                end
+
+                local sprRoot = getHRP()
+                local farmCenter = getMyPlotCenter()
+                if sprRoot and farmCenter and (sprRoot.Position - farmCenter).Magnitude > 45 then
+                    invoke(R.QuickWarp, "Farm")
+                    task.wait(0.5)
+                end
                 local ok, res, msg = invoke(R.FarmAction, "gearUse", chosenType)
                 if ok and res then
-                    logActivity(string.format("Watering: Activated %s Sprinkler! Crops speed boosted.", chosenType), "Watering")
+                    local newType, newRemSecs = getActiveSprinklerRemaining()
+                    local timeDesc = ""
+                    if newRemSecs and newRemSecs > 0 then
+                        local m = math.floor(newRemSecs / 60)
+                        local s = math.floor(newRemSecs % 60)
+                        timeDesc = string.format(" (รวมเหลือ %02d:%02d นาที)", m, s)
+                    end
+                    local actionWord = isSwitchingType and "Switched to" or "Stacked"
+                    local actionWordThai = isSwitchingType and "เปลี่ยนเป็น" or "ต่อเวลา"
+                    logActivity(string.format("Watering: %s %s Sprinkler!%s", actionWord, chosenType, timeDesc), "Watering")
+                    notify("Watering", string.format("%sสปริงเกลอร์ %s สำเร็จ!%s", actionWordThai, chosenType, timeDesc))
                 end
-            elseif isManual and not S.autoBuySprinkler then
-                notify("Watering", "ไม่มีสปริงเกลอร์ในกระเป๋า (เปิด Auto Buy หรือไปซื้อที่ร้านเมล็ด)!")
+            elseif isManual then
+                notify("Watering", string.format("ไม่มีสปริงเกลอร์ %s ในกระเป๋า (0 ชิ้น)!", preferredType))
             end
         end
     end)
@@ -3476,9 +4021,14 @@ local function doDungeonCycle(targetDungeonKey, isManual)
                 if S.autoTeamSkill then invoke(R.TeamSkill) end
                 task.wait(0.35)
             else
-                enableCombatHover(false)
-                logActivity(string.format("Dungeon %s cleared! Returning to Farm...", dung.name), "Dungeon")
-                break
+                if tick() - t0 < 3.5 then
+                    -- Dungeon just entered; allow mobs 3.5s to stream in before declaring cleared
+                    task.wait(0.5)
+                else
+                    enableCombatHover(false)
+                    logActivity(string.format("Dungeon %s cleared! Returning to Farm...", dung.name), "Dungeon")
+                    break
+                end
             end
         end
 
@@ -3538,10 +4088,11 @@ local function doFrostTowerStep(isManual)
 
         -- 2. Frost Gate is active! Warp to Frost Gate Spot
         local gateSpot = plr:GetAttribute("FrostGateSpot")
+        local gatePos = toVector3(gateSpot) or POS.FROST_STATUE
         local root = getHRP()
-        if gateSpot and typeof(gateSpot) == "CFrame" and root then
+        if root and gatePos then
             logActivity("Frost Tower: Frost Gate is OPEN! Warping to Azureus Apparition...", "Frost Tower")
-            moveToCFrame(gateSpot + Vector3.new(0, 3, 0))
+            moveToCFrame(CFrame.new(gatePos + Vector3.new(0, 3, 0)))
             task.wait(0.6)
 
             -- Fire proximity prompt if present on apparition
@@ -3601,15 +4152,17 @@ end
 -- ===== AUTO MAIN QUEST COMPLETER (EXECUTES STORY QUESTS AUTOMATICALLY) =====
 local isRunningMainQuest = false
 local function doMainQuestStep()
-    if isRunningMainQuest then return end
+    if isRunningMainQuest then return true end
+
+    local mqStep = plr:GetAttribute("MQStep") or 1
+    local stepData = Config and Config.MainQuest and Config.MainQuest.Steps and Config.MainQuest.Steps[mqStep]
+    if not stepData then
+        return false
+    end
+
     isRunningMainQuest = true
 
     local s, err = pcall(function()
-        local mqStep = plr:GetAttribute("MQStep") or 1
-        local stepData = Config and Config.MainQuest and Config.MainQuest.Steps and Config.MainQuest.Steps[mqStep]
-        if not stepData then
-            return
-        end
 
         local kind = stepData.kind or ""
         local title = stepData.title or ("Step " .. tostring(mqStep))
@@ -3932,6 +4485,7 @@ local function doMainQuestStep()
         warn("[BG_MainQuest] Error: " .. tostring(err))
     end
     isRunningMainQuest = false
+    return true
 end
 
 -- ===== FIZZ GOLDEN EGG ENGINE (PRIORITY #1) =====
@@ -3972,6 +4526,8 @@ local function doGoldEggCycle()
 
         -- Keep holding at Y+30 while event is active and we are the holder
         while isGoldEggActive() and tonumber(BG:GetAttribute("FizzHolder")) == plr.UserId and getgenv().BG_Running and S.autoGoldEgg do
+            root = getHRP()
+            if not root or not root.Parent then break end
             if (root.Position - hoverPos).Magnitude > 3 then
                 root.CFrame = CFrame.new(hoverPos)
             end
@@ -4067,124 +4623,918 @@ if type(getgenv().BG_API) == "table" then
     getgenv().BG_API.doDungeonCycle          = doDungeonCycle
     getgenv().BG_API.doWateringSprinklerStep = doWateringSprinklerStep
     getgenv().BG_API.getAvailableSprinklersToBuy = getAvailableSprinklersToBuy
+    getgenv().BG_API.doBuyAndPlantTreeStep   = doBuyAndPlantTreeStep
     getgenv().BG_API.buySprinklersBatchAtShop = buySprinklersBatchAtShop
     getgenv().BG_API.warpToZoneSafely        = warpToZoneSafely
     getgenv().BG_API.doUnifiedQuestCycle     = doUnifiedQuestCycle
+    getgenv().BG_API.doCooperativeMaintenanceSequence = function() return doCooperativeMaintenanceSequence() end
+    getgenv().BG_API.shouldRunMaintenance    = function() return shouldRunMaintenance() end
 end
 
+-- ==============================================================================
+-- 🧠 SMART UNIFIED COOPERATIVE TASK SCHEDULER & MUTEX ORCHESTRATOR
+-- ==============================================================================
+local isSchedulerBusy = false
+local savedCombatResumeCF = nil
+local savedCombatResumeZone = nil
+
+local function isAnyBlockingTaskActive()
+    return isFarming 
+        or isSelling 
+        or isExecutingDungeon 
+        or isExecutingArena 
+        or isExecutingFrost 
+        or isExecutingQuest 
+        or isRunningMainQuest 
+        or isExecutingSprinkler 
+        or isExecutingTreeCycle
+        or isCollectingCoins 
+        or isHarvestingFruit 
+        or isPullingCards 
+        or isBuyingBeds 
+        or isUpgradingHouse
+        or (HW and HW.isDoingHalloweenEvent)
+end
+
+local function saveCombatCheckpoint()
+    local root = getHRP()
+    if root then
+        local center = getMyPlotCenter()
+        local distFromCenter = center and (root.Position - center).Magnitude or 999
+        -- Only record as a field combat position if away from farm plot center and not inside dungeon
+        if distFromCenter > 60 and root.Position.X < 900 then
+            savedCombatResumeCF = root.CFrame
+            savedCombatResumeZone = S.warpZone
+        end
+    end
+end
+
+local function restoreCombatCheckpoint()
+    local hasCombatMode = S.autoQuestOn or S.autoBossHunt or S.autoFarmMobs or S.autoMainQuest
+    if hasCombatMode and savedCombatResumeCF then
+        local root = getHRP()
+        if root then
+            if savedCombatResumeZone and S.warpZone and savedCombatResumeZone == S.warpZone then
+                warpToZoneSafely(savedCombatResumeZone)
+                task.wait(0.3)
+                root = getHRP()
+                if root and savedCombatResumeCF then
+                    root.CFrame = savedCombatResumeCF
+                end
+            else
+                root.CFrame = savedCombatResumeCF
+            end
+        end
+        savedCombatResumeCF = nil
+    elseif (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) then
+        local center = getMyPlotCenter()
+        local root = getHRP()
+        if center and root then
+            local dist = (root.Position - center).Magnitude
+            if dist > 35 then
+                root.CFrame = CFrame.new(center)
+            end
+        end
+    end
+end
+
+HW.canUpgradeHouse = function()
+    local myPlot = getMyPlot()
+    local plotName = myPlot and myPlot.Name
+    local builds = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Builds")
+    local plotBuilds = builds and plotName and builds:FindFirstChild(plotName)
+    local houseModel = plotBuilds and plotBuilds:FindFirstChild("House")
+    local curTier = (houseModel and (houseModel:GetAttribute("HouseTier") or houseModel:GetAttribute("Tier"))) or 1
+    local nextTier = curTier + 1
+    local tiers = (Config and Config.HouseTiers) or HOUSE_TIERS
+    if not tiers or not tiers[nextTier] then return false end
+    local nextInfo = tiers[nextTier]
+    local pLevel = (CachedData and CachedData.farmLevel) or (plr and plr:GetAttribute("FarmLevel")) or 1
+    local pCoins = (CachedData and CachedData.coins) or (plr and plr:GetAttribute("Coins")) or 0
+    return pLevel >= (nextInfo.level or 0) and pCoins >= (nextInfo.price or 0)
+end
+
+HW.canDoAnyTreeWork = function()
+    local cd = CachedData or getgenv().CachedData or {}
+    local trees = cd.trees or {}
+    local currentTreeCount = 0
+    for _ in pairs(trees) do
+        currentTreeCount = currentTreeCount + 1
+    end
+    local maxTrees = (Config and Config.Orchard and Config.Orchard.MaxTrees) or 9
+
+    -- Check if any saplings in bag can be planted
+    if S.autoPlantTrees and currentTreeCount < maxTrees then
+        local saplings = cd.saplings or {}
+        for _, count in pairs(saplings) do
+            if (tonumber(count) or 0) > 0 then
+                return true
+            end
+        end
+    end
+
+    -- Check if we can buy any selected tree
+    if S.autoBuyTrees and currentTreeCount < maxTrees then
+        local myCoins = tonumber(cd.coins) or 0
+        local myFarmLevel = tonumber(cd.farmLevel) or 1
+        local treeDefs = (Config and Config.Orchard and Config.Orchard.Trees) or {}
+        local buyOrder = { "StarFruit", "Coconut", "Mango", "Orange", "Apple" }
+        for _, tId in ipairs(buyOrder) do
+            local isSelected = not S.selectedTreesToBuy or next(S.selectedTreesToBuy) == nil or S.selectedTreesToBuy[tId] == true
+            local def = treeDefs[tId]
+            if isSelected and def and myFarmLevel >= (def.level or 1) and myCoins >= (def.price or 0) then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+HW.canBuyAnyBed = function()
+    local myPlot = getMyPlot()
+    local cropBeds = myPlot and myPlot:FindFirstChild("CropBeds")
+    if not cropBeds then return false end
+    local currentCoins = (CachedData and CachedData.coins) or (plr and plr:GetAttribute("Coins")) or 0
+    local farmLevel = (CachedData and CachedData.farmLevel) or (plr and plr:GetAttribute("FarmLevel")) or 1
+    local maxClusters = (Config and Config.BedClusters and Config.BedClusters(farmLevel)) or 16
+    for i = 1, maxClusters do
+        if not cropBeds:FindFirstChild("Bed_" .. i) then
+            local price = (Config and Config.BedGroupPrice and Config.BedGroupPrice(i)) or 999999
+            return currentCoins >= price
+        end
+    end
+    return false
+end
+
+shouldRunMaintenance = function(now)
+    now = now or tick()
+
+    if isSchedulerBusy or isAnyBlockingTaskActive() then
+        return false
+    end
+
+    -- Do not interrupt active boss combat, dungeon, arena or tower
+    if isExecutingDungeon or isExecutingArena or isExecutingFrost then
+        return false
+    end
+    if currentBossTarget and currentBossTarget.Parent and not currentBossTarget:GetAttribute("DiedAt") then
+        return false
+    end
+
+    -- Do not interrupt active monster quest hunting until the quest objective is complete!
+    if S.autoQuestOn and activeQuestHuntingZone and activeQuestHuntingZone > 0 then
+        return false
+    end
+
+    -- Priority: Sell Halloween Produce to Witch Stall with debounce check
+    if S.autoHalloweenMaster and S.autoSellHwProduce and HW and HW.getHwProduceCount and HW.getHwProduceCount() > 0 and (now - (HW.lastHwSellCheck or 0) >= (S.hwSellInterval or 30)) then
+        return true
+    end
+
+    if (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) and (now - lastCropCheck >= (S.cropInterval or 20)) then
+        return true
+    end
+    if S.autoSellOn and getSellableProduceCount(S.sellMode) > 0 and (now - lastSellCheck >= (S.autoSellSecs or 30)) then
+        return true
+    end
+    if S.autoPenCollect and (now - lastPenCollectCheck >= (S.penCollectInterval or 35)) then
+        local bank = tonumber(CachedData and CachedData.penBank and CachedData.penBank.bank) or 0
+        if bank > 0 then
+            return true
+        end
+    end
+    if S.autoHarvestFruit then
+        local readyTrees = getReadyFruitTrees and getReadyFruitTrees()
+        if readyTrees and #readyTrees > 0 and (now - lastFruitHarvestCheck >= 5) then
+            return true
+        end
+    end
+    if (S.autoBuyTrees or S.autoPlantTrees) and (now - lastTreeCycleCheck >= 30) and HW.canDoAnyTreeWork and HW.canDoAnyTreeWork() then
+        return true
+    end
+    if S.autoWaterSprinkler and (now - lastSprinklerCheck >= 20) then
+        local activeType, remSecs = getActiveSprinklerRemaining()
+        local threshSecs = (S.sprinklerThresholdMinutes or 30) * 60
+        if not activeType or remSecs < threshSecs then
+            return true
+        end
+    end
+    if S.autoBuySprinkler then
+        local serverNow = workspace:GetServerTimeNow()
+        local currentRestockId = Config.RestockId and Config.RestockId(serverNow) or 0
+        if currentRestockId ~= lastSprinklerRestockId then
+            return true
+        end
+    end
+    if S.autoCardPull and canPullAnyCards and canPullAnyCards() and (now - lastCardPullCheck >= (S.cardPullInterval or 15)) then
+        return true
+    end
+    if S.autoUpgradeHouse and (now - lastHouseUpgradeCheck >= 30) and HW.canUpgradeHouse() then
+        return true
+    end
+    if S.autoBuyBeds and (now - lastBedBuyCheck >= 20) and HW.canBuyAnyBed() then
+        return true
+    end
+    return false
+end
+
+-- Executes all ready farm/shop maintenance tasks in strict, seamless sequential order
+doCooperativeMaintenanceSequence = function()
+    if isSchedulerBusy or isAnyBlockingTaskActive() then return end
+    isSchedulerBusy = true
+
+    pcall(function()
+        local now = tick()
+        saveCombatCheckpoint()
+
+        -- STEP 1: CROP HARVEST & PLANT (FARM PLOT)
+        if (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) and (now - lastCropCheck >= (S.cropInterval or 20)) then
+            lastCropCheck = now
+            doRealFarmCycle()
+            task.wait(0.2)
+        end
+
+        -- STEP 2: SPRINKLER CHECK / RESTOCK BUY / WATERING
+        if (S.autoWaterSprinkler or S.autoBuySprinkler) and (now - lastSprinklerCheck >= 15) then
+            doWateringSprinklerStep(false)
+            task.wait(0.2)
+        end
+
+        -- STEP 3: FEED HUNGRY ANIMALS (USES FRESH PRODUCE BEFORE SELLING)
+        if S.autoPenFeed and (now - lastPenFeedCheck >= (S.penFeedInterval or 20)) then
+            lastPenFeedCheck = now
+            doPenFeedCycle(false)
+            task.wait(0.2)
+        end
+
+        -- STEP 4: COLLECT PEN COINS (WARP TO PEN CHEST)
+        if S.autoPenCollect and (now - lastPenCollectCheck >= (S.penCollectInterval or 35)) then
+            lastPenCollectCheck = now
+            local bank = tonumber(CachedData and CachedData.penBank and CachedData.penBank.bank) or 0
+            if bank > 0 then
+                doPenCoinCollect(false)
+                task.wait(0.2)
+            end
+        end
+
+        -- STEP 5: HARVEST FRUIT TREES (ORCHARD)
+        if S.autoHarvestFruit then
+            local readyTrees = getReadyFruitTrees and getReadyFruitTrees()
+            if readyTrees and #readyTrees > 0 and (now - lastFruitHarvestCheck >= 3) then
+                lastFruitHarvestCheck = now
+                doFruitTreeHarvest(false)
+                task.wait(0.2)
+            end
+        end
+
+        -- STEP 5.2: BUY & PLANT ORCHARD FRUIT TREES
+        if (S.autoBuyTrees or S.autoPlantTrees) and (now - lastTreeCycleCheck >= 30) and HW.canDoAnyTreeWork and HW.canDoAnyTreeWork() then
+            doBuyAndPlantTreeStep(false)
+            task.wait(0.2)
+        end
+
+        -- STEP 6: BUY BED GROUPS (WHEN COINS ENOUGH)
+        if S.autoBuyBeds and (now - lastBedBuyCheck >= 20) and HW.canBuyAnyBed() then
+            lastBedBuyCheck = now
+            doBuyBedGroups(false)
+            task.wait(0.2)
+        end
+
+        -- STEP 7: UPGRADE HOUSE (WHEN LEVEL & COINS ENOUGH)
+        if S.autoUpgradeHouse and (now - lastHouseUpgradeCheck >= 30) and HW.canUpgradeHouse() then
+            lastHouseUpgradeCheck = now
+            doUpgradeHouse(false)
+            task.wait(0.2)
+        end
+
+        -- STEP 7.5: SELL HALLOWEEN EVENT CROPS AT WITCH STALL FIRST!
+        if S.autoHalloweenMaster and S.autoSellHwProduce and HW and HW.getHwProduceCount and HW.getHwProduceCount() > 0 and (now - (HW.lastHwSellCheck or 0) >= (S.hwSellInterval or 30)) then
+            HW.lastHwSellCheck = now
+            logActivity("🎃 Priority Sell: Warping to Witch Stall to sell Event Crops first...", "Event")
+            HW.openWitchStall()
+            task.wait(0.3)
+            pcall(function() R.Halloween:InvokeServer("sellCrops", nil) end)
+            task.wait(0.2)
+        end
+
+        -- STEP 8: SELL NORMAL PRODUCE AT MARKET (WARP TO MARKET)
+        if S.autoSellOn and getSellableProduceCount(S.sellMode) > 0 and (now - lastSellCheck >= (S.autoSellSecs or 30)) then
+            lastSellCheck = now
+            doSellCycle(S.sellMode, false)
+            task.wait(0.2)
+        end
+
+        -- STEP 9: CARD GACHA PULL (WARP TO CARD SHRINE)
+        if S.autoCardPull and canPullAnyCards and canPullAnyCards() and (now - lastCardPullCheck >= (S.cardPullInterval or 15)) then
+            lastCardPullCheck = now
+            doCardPullCycle(false)
+            task.wait(0.2)
+        end
+
+        -- STEP 10: SEAMLESS RETURN TO COMBAT OR FARM
+        restoreCombatCheckpoint()
+    end)
+
+    isSchedulerBusy = false
+end
+
+-- ==============================================================================
+-- 🎃 HALLOWEEN PUMPKIN FESTIVAL ENGINE (WITCH STALL, COOKING, GLOW PUMPKINS)
+-- ==============================================================================
+HW.POS_WITCH_STALL = Vector3.new(-15.4, 6.2, 382)
+HW.POS_COOK_STOVE  = Vector3.new(-47.0, 7.25, -22)
+HW.isDoingHalloweenEvent = false
+HW.lastHwCycleCheck = 0
+HW.RECIPES = {
+    GhostPie     = { { "GhostPumpkin", 2 } },
+    GarlicSoup   = { { "SilverGarlic", 1 }, { "GhostPumpkin", 1 } },
+    BatPopcorn   = { { "BatCorn", 2 } },
+    RoseTea      = { { "NightRose", 1 }, { "SilverGarlic", 1 } },
+    MushroomStew = { { "GhostMushroom", 1 }, { "BatCorn", 1 }, { "GhostPumpkin", 1 } },
+}
+
+HW.isHalloweenEventActive = function()
+    if workspace:FindFirstChild("HW_GlowPumpkins") or workspace:FindFirstChild("HW_WitchStall") then
+        return true
+    end
+    local cd = CachedData or getgenv().CachedData or {}
+    if cd.hw and type(cd.hw) == "table" then
+        return true
+    end
+    return false
+end
+
+HW.hasActiveGlowPumpkins = function()
+    local folder = workspace:FindFirstChild("HW_GlowPumpkins")
+    if not folder then return false end
+    for _, child in ipairs(folder:GetChildren()) do
+        local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and prompt.Enabled then
+            return true
+        end
+    end
+    return false
+end
+
+HW.openWitchStall = function()
+    local root = getHRP()
+    if not root then return false end
+    -- Teleport directly in front of the witch counter with clean facing
+    root.CFrame = CFrame.lookAt(Vector3.new(-15.4, 6.5, 383.5), Vector3.new(-15.4, 6.2, 386))
+    root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.35)
+    local stall = workspace:FindFirstChild("HW_WitchStall")
+    local prompt = stall and stall:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Enabled and fireproximityprompt then
+        pcall(function() fireproximityprompt(prompt, 0) end)
+        task.wait(0.25)
+    end
+    return true
+end
+
+HW.openCookStove = function()
+    local root = getHRP()
+    if not root then return false end
+    -- Teleport directly on the cook spot facing the cooking stove
+    root.CFrame = CFrame.lookAt(Vector3.new(-45.5, 6.5, -22), Vector3.new(-47.0, 6.5, -22))
+    root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.35)
+    local stove = workspace:FindFirstChild("HW_CookStove")
+    local prompt = stove and stove:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Enabled and fireproximityprompt then
+        pcall(function() fireproximityprompt(prompt, 0) end)
+        task.wait(0.25)
+    end
+    return true
+end
+
+HW.doCollectGlowPumpkins = function()
+    local folder = workspace:FindFirstChild("HW_GlowPumpkins")
+    if not folder then return end
+    local pumpkins = folder:GetChildren()
+    if #pumpkins == 0 then return end
+
+    local root = getHRP()
+    if not root then return end
+
+    for _, p in ipairs(pumpkins) do
+        if not getgenv().BG_Running or not S.autoHalloweenMaster or not S.autoCollectGlowPumpkins then break end
+        if p and p.Parent then
+            local prompt = p:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt and prompt.Enabled then
+                local pPos = (p:IsA("BasePart") and p.Position) or (p:IsA("Model") and p:GetPivot().Position)
+                if pPos then
+                    root = getHRP()
+                    if root then
+                        root.CFrame = CFrame.new(pPos + Vector3.new(0, 1.2, 2.0), pPos)
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        task.wait(0.35)
+                        if fireproximityprompt then
+                            pcall(function() fireproximityprompt(prompt, 0) end)
+                        end
+                        task.wait(0.25)
+                        logActivity("🎃 Collected Glow Pumpkin! (+2 Candy)", "Event")
+                    end
+                end
+            end
+        end
+    end
+
+    if S.autoHwQuests and HW.doHwDailyAndMilestones then
+        task.defer(HW.doHwDailyAndMilestones)
+    end
+end
+
+HW.doHwDailyAndMilestones = function()
+    if not R.Halloween then return end
+
+    local ok, _, _, state = pcall(function() return R.Halloween:InvokeServer("state") end)
+    if not (ok and type(state) == "table") then return end
+
+    -- 1. Daily check-in
+    if S.autoHwCheckin and state.checkin and not state.checkin.done then
+        local cOk, cSuccess, cMsg, cState = pcall(function() return R.Halloween:InvokeServer("checkin") end)
+        if cOk and cSuccess == true then
+            logActivity("🎃 Event Daily Check-in Claimed! (" .. tostring(cMsg or "") .. ")", "Event")
+            notify("Pumpkin Event", "Daily Check-in Claimed!")
+            if type(cState) == "table" then state = cState end
+            task.wait(0.6)
+        end
+    end
+
+    -- 2. Daily Quests claim (1=kill 20, 2=pumpkin 5, 3=harvest 10)
+    if S.autoHwQuests and state.quests then
+        local order = { "kill", "pumpkin", "harvest" }
+        local needs = { kill = 20, pumpkin = 5, harvest = 10 }
+        local got = state.quests.got or {}
+        local done = state.quests.done or {}
+        local prog = state.quests.p or {}
+
+        for i, key in ipairs(order) do
+            local alreadyClaimed = got[key] == true
+            if not alreadyClaimed then
+                local isDone = (done[key] == true) or ((tonumber(prog[key]) or 0) >= (needs[key] or 999))
+                if isDone then
+                    local qOk, qSuccess, qMsg, qState = pcall(function()
+                        return R.Halloween:InvokeServer("quests", "claim", i)
+                    end)
+                    if qOk and qSuccess == true then
+                        logActivity("🎃 Claimed Event Quest #" .. i .. " (" .. key .. "): " .. tostring(qMsg or "+10 Candy"), "Event")
+                        notify("Pumpkin Event", "Claimed: " .. key .. " (" .. tostring(qMsg or "+10 Candy") .. ")")
+                        got[key] = true
+                        if type(qState) == "table" then state = qState end
+                        task.wait(0.6)
+                    end
+                end
+            end
+        end
+    end
+
+    -- 3. Milestone Candy Track (Progress uses state.life = Lifetime Accumulated Candy!)
+    if S.autoHwTrack and state then
+        local life = tonumber(state.life) or tonumber(state.candy) or 0
+        local track = state.track or {}
+        local HW_TRACK_REQ = { 20, 75, 150, 250, 525, 840, 1260, 1680, 2310 }
+        for tier = 1, #HW_TRACK_REQ do
+            local req = HW_TRACK_REQ[tier]
+            if life >= req and not track[tostring(tier)] then
+                local tOk, tSuccess, tMsg, tState = pcall(function() return R.Halloween:InvokeServer("claimTrack", tier) end)
+                if tOk and tSuccess == true then
+                    logActivity("🎃 Claimed Candy Track Tier " .. tier .. " Reward! (" .. tostring(tMsg or "") .. ")", "Event")
+                    notify("Pumpkin Event", "Claimed Candy Track Tier " .. tier .. "!")
+                    track[tostring(tier)] = true
+                    if type(tState) == "table" then state = tState end
+                    task.wait(0.6)
+                end
+            end
+        end
+    end
+end
+
+HW.getHwProduceCount = function()
+    local cd = CachedData or getgenv().CachedData or {}
+    local total = 0
+    local p = cd.produce or {}
+    local hwCrops = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
+    for crop, count in pairs(p) do
+        if hwCrops[crop] then
+            total = total + (tonumber(count) or 0)
+        end
+    end
+    return total
+end
+
+HW.doHwSeedsAndShopCycle = function(isForce)
+    if not R.Halloween then return end
+
+    local cd = CachedData or getgenv().CachedData or {}
+    local hwProduceCount = HW.getHwProduceCount()
+    local bagSeeds = cd.seeds or {}
+    local hwSeedsList = { "GhostMushroom", "NightRose", "BatCorn", "SilverGarlic", "GhostPumpkin" }
+    local targetStock = S.hwTargetSeedStock or 20
+
+    local needSell = (isForce or S.autoSellHwProduce) and hwProduceCount > 0
+    local needSeeds = false
+    if isForce or S.autoBuyHwSeeds then
+        for _, sId in ipairs(hwSeedsList) do
+            local isSel = isForce or (S.selectedHwSeeds and S.selectedHwSeeds[sId])
+            if isSel and (tonumber(bagSeeds[sId]) or 0) < targetStock then
+                needSeeds = true
+                break
+            end
+        end
+    end
+
+    local hwState = (cd.hw and type(cd.hw) == "table" and cd.hw) or {}
+    local candy = tonumber(hwState.candy) or 0
+    local crystal = tonumber(hwState.crystal) or 0
+    local needEgg = (isForce or S.autoBuyHwEgg and candy >= 100) or (isForce or S.autoBuyHwEggCrystal and crystal >= 200)
+    local needShop = (isForce or S.autoBuyHwShop) and S.selectedHwShopItems and next(S.selectedHwShopItems) ~= nil and crystal >= 50
+
+    if not isForce and not (needSell or needSeeds or needEgg or needShop) then
+        return
+    end
+
+    -- TP to Witch Stall FIRST before calling any remotes! (Required by server proximity check!)
+    HW.openWitchStall()
+    task.wait(0.35)
+
+    -- 1. Sell leftover event crops for Red Crystals (Done AFTER cooking cycle)
+    if isForce or S.autoSellHwProduce then
+        local sOk, sSuccess, sMsg, sState = pcall(function() return R.Halloween:InvokeServer("sellCrops", nil) end)
+        if sOk and sSuccess ~= false then
+            logActivity("🎃 Sold Event Crops for Red Crystals! (" .. tostring(sMsg or "") .. ")", "Event")
+            notify("Pumpkin Event", "ขายผลผลิตอีเวนต์ได้ Red Crystals!")
+            if type(sState) == "table" and cd.hw then cd.hw = sState end
+        end
+        task.wait(0.3)
+    end
+
+    -- 2. Restock event seeds at Witch Stall
+    if isForce or S.autoBuyHwSeeds then
+        for _, sId in ipairs(hwSeedsList) do
+            local isSel = isForce or (S.selectedHwSeeds and S.selectedHwSeeds[sId])
+            if isSel then
+                local currentCount = tonumber(bagSeeds[sId]) or 0
+                if isForce or currentCount < targetStock then
+                    local buyAmt = 10
+                    local bOk, bSuccess, bMsg, bState = pcall(function() return R.Halloween:InvokeServer("buySeed", sId, buyAmt) end)
+                    if bOk and bSuccess == true then
+                        bagSeeds[sId] = currentCount + buyAmt
+                        logActivity("🎃 Bought " .. buyAmt .. "x " .. sId .. " Seeds (" .. tostring(bMsg or "") .. ")", "Event")
+                        notify("Pumpkin Event", "ซื้อเมล็ด " .. sId .. " x" .. buyAmt)
+                        if type(bState) == "table" and cd.hw then cd.hw = bState end
+                    end
+                    task.wait(0.3)
+                end
+            end
+        end
+    end
+
+    -- 3. Exchange Egg & Shop
+    local ok, _, _, state = pcall(function() return R.Halloween:InvokeServer("state") end)
+    if ok and type(state) == "table" then
+        if cd.hw then cd.hw = state end
+        local curCandy = tonumber(state.candy) or 0
+        local eggPrice = (state.egg and tonumber(state.egg.price)) or 100
+        if (isForce or S.autoBuyHwEgg) and curCandy >= eggPrice then
+            local eOk, eSuccess, eMsg = pcall(function() return R.Halloween:InvokeServer("buyEgg") end)
+            if eOk and eSuccess == true then
+                logActivity("🎃 Exchanged " .. eggPrice .. " Candy for Ghost Pumpkin Egg! (" .. tostring(eMsg or "") .. ")", "Event")
+                notify("Pumpkin Event", "แลกไข่ Ghost Pumpkin Egg สำเร็จ!")
+            end
+            task.wait(0.3)
+        end
+
+        local curCrystal = tonumber(state.crystal) or 0
+        if (isForce or S.autoBuyHwEggCrystal) and curCrystal >= 200 then
+            local ecOk, ecSuccess, ecMsg = pcall(function() return R.Halloween:InvokeServer("buyEgg", "crystal") end)
+            if ecOk and ecSuccess == true then
+                logActivity("🎃 Exchanged 200 Crystals for Ghost Pumpkin Egg! (" .. tostring(ecMsg or "") .. ")", "Event")
+                notify("Pumpkin Event", "แลกไข่ด้วย 200 Crystals สำเร็จ!")
+            end
+            task.wait(0.3)
+        end
+
+        -- 4. Buy Witch Shop Items
+        if (isForce or S.autoBuyHwShop) and S.selectedHwShopItems then
+            for itemId, isSel in pairs(S.selectedHwShopItems) do
+                if isSel then
+                    local shOk, shSuccess, shMsg = pcall(function() return R.Halloween:InvokeServer("buyShop", itemId) end)
+                    if shOk and shSuccess == true then
+                        logActivity("🎃 Bought Witch Shop Item: " .. tostring(itemId) .. " (" .. tostring(shMsg or "") .. ")", "Event")
+                    end
+                    task.wait(0.3)
+                end
+            end
+        end
+    end
+end
+
+HW.doHwPlaceEggCycle = function()
+    if not S.autoPlaceHwEgg or not R.EggAction then return end
+    local cd = CachedData or getgenv().CachedData or {}
+    local eggBag = cd.eggBag or {}
+    local hwEggCount = tonumber(eggBag["HalloweenEgg"]) or 0
+    if hwEggCount <= 0 then return end
+
+    invoke(R.QuickWarp, "Farm")
+    task.wait(0.6)
+    local farmCenter = getMyPlotCenter()
+    local root = getHRP()
+    if root and farmCenter then
+        root.CFrame = CFrame.new(farmCenter)
+    end
+    task.wait(0.3)
+
+    local maxNests = (Config and Config.MaxNestsFor and Config.MaxNestsFor({ houseTier = cd.houseTier, passes = cd.passes })) or 5
+    local occupied = #(cd.nests or {})
+    local emptyNests = math.max(0, maxNests - occupied)
+    local toFill = math.min(emptyNests, hwEggCount)
+
+    if toFill > 0 then
+        local ok, res = invoke(R.EggAction, "fill", "HalloweenEgg", toFill)
+        if ok then
+            logActivity(string.format("🥚 Placed %d Ghost Pumpkin Eggs in Incubator!", toFill), "Farm")
+        end
+    end
+end
+
+HW.canCookHwDish = function(dishId)
+    local recipe = HW.RECIPES[dishId]
+    if not recipe then return false end
+    local cd = CachedData or getgenv().CachedData or {}
+    local p = cd.produce or {}
+    for _, ing in ipairs(recipe) do
+        local cropName, needCount = ing[1], ing[2]
+        if (tonumber(p[cropName]) or 0) < needCount then
+            return false
+        end
+    end
+    return true
+end
+
+HW.doHwCookingCycle = function(isForce)
+    if not R.Feeding then return end
+    if not isForce and (not S.autoCookHwDishes or not S.selectedHwDishes) then return end
+
+    local dishesToTry = {}
+    if S.selectedHwDishes and next(S.selectedHwDishes) ~= nil then
+        for dishId, isSel in pairs(S.selectedHwDishes) do
+            if isSel then table.insert(dishesToTry, dishId) end
+        end
+    else
+        dishesToTry = { "GhostPie", "GarlicSoup", "BatPopcorn", "RoseTea", "MushroomStew" }
+    end
+
+    -- In auto mode: only TP if at least one dish has ingredients ready
+    local canCookAny = false
+    for _, dId in ipairs(dishesToTry) do
+        if HW.canCookHwDish(dId) then
+            canCookAny = true
+            break
+        end
+    end
+
+    if not isForce and not canCookAny then return end
+
+    -- TP to Cook Stove FIRST before calling any remotes! (Server requires StoveRange <= 22!)
+    HW.openCookStove()
+    task.wait(0.35)
+
+    local cookedTotal = 0
+    local cd = CachedData or getgenv().CachedData or {}
+    for _, dishId in ipairs(dishesToTry) do
+        while getgenv().BG_Running and (isForce or S.autoCookHwDishes) do
+            if not HW.canCookHwDish(dishId) then break end
+            local cOk, cSuccess, cMsg = pcall(function() return R.Feeding:InvokeServer("cook", dishId, 1) end)
+            if cOk and cSuccess ~= false then
+                cookedTotal = cookedTotal + 1
+                logActivity("🍲 Cooked Event Dish: " .. dishId, "Cooking")
+                notify("Cooking", "ทำอาหารสำเร็จ: " .. dishId)
+                -- Deduct locally from cd.produce
+                local recipe = HW.RECIPES[dishId] or {}
+                for _, ing in ipairs(recipe) do
+                    local cName, amt = ing[1], ing[2]
+                    if cd.produce and cd.produce[cName] then
+                        cd.produce[cName] = math.max(0, (tonumber(cd.produce[cName]) or 0) - amt)
+                    end
+                end
+                task.wait(0.4)
+            else
+                break
+            end
+        end
+    end
+
+    if isForce and cookedTotal == 0 then
+        notify("Cooking", "วัตถุดิบไม่พอสำหรับทำเมนูที่เลือก!")
+        logActivity("🍲 Missing ingredients for selected dishes", "Cooking")
+    end
+end
+
+HW.getHwEventStatusString = function()
+    local cd = CachedData or getgenv().CachedData or {}
+    local hw = cd.hw or {}
+    local candy = tonumber(hw.candy) or 0
+    local life = tonumber(hw.life) or candy
+    local crystal = tonumber(hw.crystal) or 0
+    local eggBag = cd.eggBag or {}
+    local eggCount = tonumber(eggBag["HalloweenEgg"]) or 0
+    local folder = workspace:FindFirstChild("HW_GlowPumpkins")
+    local glowCount = (folder and #folder:GetChildren()) or 0
+    local active = HW.isHalloweenEventActive()
+
+    return string.format(
+        "Event Status: %s\\n🍬 Candy: %d  |  🏆 Lifetime Candy: %d  |  🔴 Crystals: %d\\n🥚 Ghost Pumpkin Eggs in Bag: %d\\n🎃 Spawns on Map: %d Glow Pumpkins",
+        active and "ACTIVE 🎃" or "INACTIVE ⏳",
+        candy,
+        life,
+        crystal,
+        eggCount,
+        glowCount
+    )
+end
+
+HW.doHalloweenEventSequence = function(isForce)
+    if HW.isDoingHalloweenEvent or (not isForce and not S.autoHalloweenMaster) then return end
+    if not HW.isHalloweenEventActive() then return end
+
+    HW.isDoingHalloweenEvent = true
+    isSchedulerBusy = true
+
+    pcall(function()
+        saveCombatCheckpoint()
+
+        -- STEP 1: Daily check-in, daily quests, and candy track milestones (pure remote, no movement required)
+        if isForce or S.autoHwCheckin or S.autoHwQuests or S.autoHwTrack then
+            HW.doHwDailyAndMilestones()
+            task.wait(0.2)
+        end
+
+        -- STEP 2: Collect glowing pumpkins in workspace (sweeps all active spawns on map)
+        if (isForce or S.autoCollectGlowPumpkins) and HW.hasActiveGlowPumpkins() then
+            HW.doCollectGlowPumpkins()
+            task.wait(0.2)
+        end
+
+        -- STEP 3: Farm Plot Sweep (Harvest ripe crops & plant event seeds immediately)
+        if (isForce or S.autoPlantHwSeeds) and doRealFarmCycle then
+            logActivity("🎃 Warping to Farm: Harvesting ripe crops & planting event seeds...", "Event")
+            doRealFarmCycle()
+            task.wait(0.3)
+        end
+
+        -- STEP 4: Cook event dishes at witch stove FIRST (TP to stove, cooks before selling!)
+        if isForce or S.autoCookHwDishes then
+            HW.doHwCookingCycle(isForce)
+            task.wait(0.2)
+        end
+
+        -- STEP 5: Witch stall: TP to stall, sell leftover event crops, buy event seeds, exchange egg, buy shop
+        if isForce or S.autoSellHwProduce or S.autoBuyHwSeeds or S.autoBuyHwEgg or S.autoBuyHwShop then
+            HW.doHwSeedsAndShopCycle(isForce)
+            task.wait(0.2)
+        end
+
+        -- STEP 5.5: Normal Market sell if player also harvested normal crops
+        if S.autoSellOn and getSellableProduceCount and getSellableProduceCount(S.sellMode) > 0 and doSellCycle then
+            doSellCycle(S.sellMode, false)
+            task.wait(0.2)
+        end
+
+        -- STEP 6: Place newly acquired event eggs in farm incubators
+        if isForce or S.autoPlaceHwEgg then
+            HW.doHwPlaceEggCycle()
+            task.wait(0.2)
+        end
+
+        -- STEP 7: Restore combat / farm checkpoint smoothly
+        restoreCombatCheckpoint()
+    end)
+
+    isSchedulerBusy = false
+    HW.isDoingHalloweenEvent = false
+end
+
+HW.shouldRunHalloweenEvent = function(now)
+    if not S.autoHalloweenMaster then return false end
+    if not HW.isHalloweenEventActive() then return false end
+
+    if isSchedulerBusy or isAnyBlockingTaskActive() then
+        return false
+    end
+    if isExecutingDungeon or isExecutingArena or isExecutingFrost then
+        return false
+    end
+    if currentBossTarget and currentBossTarget.Parent and not currentBossTarget:GetAttribute("DiedAt") then
+        return false
+    end
+    if S.autoQuestOn and activeQuestHuntingZone and activeQuestHuntingZone > 0 then
+        return false
+    end
+
+    -- Active glow pumpkins with 15s debounce (prevents spamming sequence every frame)
+    if S.autoCollectGlowPumpkins and (now - (HW.lastGlowCheck or 0) >= 15) and HW.hasActiveGlowPumpkins() then
+        HW.lastGlowCheck = now
+        return true
+    end
+
+    -- Otherwise periodic cycle
+    if (now - HW.lastHwCycleCheck) >= (S.hwCycleInterval or 25) then
+        HW.lastHwCycleCheck = now
+        return true
+    end
+
+    return false
+end
+
+if type(getgenv().BG_API) == "table" then
+    getgenv().BG_API.doHalloweenEventSequence = HW.doHalloweenEventSequence
+    getgenv().BG_API.doCollectGlowPumpkins    = HW.doCollectGlowPumpkins
+    getgenv().BG_API.doHwDailyAndMilestones   = HW.doHwDailyAndMilestones
+    getgenv().BG_API.doHwSeedsAndShopCycle    = HW.doHwSeedsAndShopCycle
+    getgenv().BG_API.doHwPlaceEggCycle        = HW.doHwPlaceEggCycle
+    getgenv().BG_API.doHwCookingCycle         = HW.doHwCookingCycle
+end
+
+-- ===== PRIMARY MASTER ORCHESTRATION LOOP =====
 task.spawn(function()
-    while task.wait(0.2) do
+    while task.wait(0.15) do
         if not isSessionActive() then break end
 
-        -- Mutex: Prevent any overlapping teleports or conflicting workflows
-        if isFarming or isSelling or isExecutingDungeon or isExecutingArena or isExecutingFrost or isExecutingQuest or isRunningMainQuest or isExecutingSprinkler then
-            task.wait(0.25)
+        -- 1. INSIDE DUNGEON GUARD: Prevent background tasks from hijacking position
+        local loopRoot = getHRP()
+        if loopRoot and loopRoot.Position.X > 900 then
+            task.wait(0.3)
             continue
         end
 
-        local loopRoot = getHRP()
-        if loopRoot and loopRoot.Position.X > 900 then
-            -- Inside dungeon: Prevent background tasks from hijacking position
-            task.wait(0.25)
+        -- 2. MUTEX GUARD: Wait if any blocking action is currently running
+        if isSchedulerBusy or isAnyBlockingTaskActive() then
+            task.wait(0.2)
             continue
         end
 
         local now = tick()
 
-        -- PRIORITY 1: GOLD EGG EVENT (PREEMPTS EVERYTHING WHILE ACTIVE)
+        -- PRIORITY 1: GOLD EGG EVENT (PREEMPTS EVERYTHING IN GAME WHILE ACTIVE)
         if S.autoGoldEgg and isGoldEggActive() then
             doGoldEggCycle()
 
-        -- PRIORITY 2: HUNT ACTIVE SELECTED BOSS (WHEN ALIVE IN WS)
-        elseif S.autoBossHunt and getAliveSelectedBoss() ~= nil then
-            doSingleBossStep()
+        -- PRIORITY 1.5: HALLOWEEN EVENT (PUMPKINS, STALL, QUESTS, EGGS)
+        elseif HW and HW.shouldRunHalloweenEvent and HW.shouldRunHalloweenEvent(now) then
+            HW.doHalloweenEventSequence()
 
-        -- PRIORITY 3: PERIODIC CROP FARMING & ANIMAL FEED (QUICK HARVEST + REPLANT ~1.5s)
-        elseif S.autoFarm and (now - lastCropCheck >= (S.cropInterval or 20)) then
-            lastCropCheck = now
-            doRealFarmCycle()
+        -- PRIORITY 2: PERIODIC PLOT & SHOP MAINTENANCE (SEQUENTIAL, ZERO TELEPORT COLLISION)
+        elseif shouldRunMaintenance(now) then
+            doCooperativeMaintenanceSequence()
 
-            -- AUTO WATER CROPS (SPRINKLERS)
-            if S.autoWaterSprinkler or S.autoBuySprinkler then
-                task.spawn(function() doWateringSprinklerStep(false) end)
-            end
-
-            -- AUTO FEED ANIMALS WITH FRESH PRODUCE BEFORE SELLING
-            if S.autoPenFeed then
-                doPenFeedCycle(false)
-            end
-
-            if S.autoSellOn and getSellableProduceCount(S.sellMode) > 0 then
-                doSellCycle(S.sellMode, false)
-            elseif S.autoPenCollect and not isCollectingCoins then
-                if (now - (lastPenCollectCheck or 0) >= 10) then
-                    lastPenCollectCheck = now
-                    task.spawn(function() doPenCoinCollect(false) end)
-                end
-            end
-
-        -- PRIORITY 3.5: AUTO WATERING / SPRINKLER (CROP GROWTH BOOST & RESTOCK BUY)
-        elseif (S.autoWaterSprinkler or S.autoBuySprinkler) and (now - (lastSprinklerCheck or 0) >= 15) then
-            doWateringSprinklerStep(false)
-
-        -- PRIORITY 4: COLOSSEUM / ARENA MATCH (DUEL AGAINST TRAINERS/PLAYERS)
+        -- PRIORITY 3: TIMED INSTANCED MATCHES (ARENA / FROST / DUNGEON)
         elseif S.autoColosseum and (now - lastArenaCheck >= 25) then
             doColosseumStep(false)
 
-        -- PRIORITY 5: FROST TOWER / AZUREUS CHALLENGE
         elseif S.autoTower and (now - lastFrostCheck >= 35) then
             doFrostTowerStep(false)
 
-        -- PRIORITY 6: AUTO DUNGEON GRIND (ZONE 2, 3, 4 DUNGEON PORTALS)
         elseif S.autoDungeon and (now - lastDungeonTime >= (S.dungeonInterval or 40)) then
             doDungeonCycle(S.selectedDungeon, false)
 
-        -- PRIORITY 7: AUTO ZONE QUEST EXECUTION (WARP TO ZONE, HUNT MOBS, CLAIM AT NPC)
+        -- PRIORITY 4: HUNT ACTIVE SELECTED BOSS (WHEN ALIVE IN WS)
+        elseif S.autoBossHunt and getAliveSelectedBoss() ~= nil then
+            doSingleBossStep()
+
+        -- PRIORITY 5: ACTIVE ZONE QUEST EXECUTION (CLAIM REWARDS / HUNT TARGET MOBS)
         elseif S.autoQuestOn and doActiveZoneQuestStep() then
-            task.wait(0.2)
+            task.wait(0.15)
 
-        -- PRIORITY 8: AUTO MAIN QUEST (STORY PROGRESSION UNTIL FINISHED)
+        -- PRIORITY 6: STORY MAIN QUEST EXECUTION
         elseif S.autoMainQuest and doMainQuestStep() then
-            task.wait(0.2)
+            task.wait(0.15)
 
-        -- STANDALONE AUTO SELL (WHEN CROP FARMING IS NOT ACTIVE)
-        elseif S.autoSellOn and not S.autoFarm and (now - lastSellCheck >= (S.autoSellSecs or 45)) then
-            lastSellCheck = now
-            if getSellableProduceCount(S.sellMode) > 0 then
-                doSellCycle(S.sellMode, false)
-            end
-
-        -- PRIORITY 9: MOB FARMING (BASE CONTINUOUS GRIND)
+        -- PRIORITY 7: CONTINUOUS MOB FARMING (BASE ZONE GRIND)
         elseif S.autoFarmMobs then
             doSingleMobStep()
         end
     end
 end)
 
--- ===== SECONDARY INDEPENDENT AUTOMATION LOOP (BUY EGGS, INCUBATORS, PEN COINS, FRUIT, HOUSE) =====
-
+-- ===== SECONDARY LOOP (PURE REMOTE CALLS ONLY - ZERO TELEPORT) =====
 task.spawn(function()
     while task.wait(0.8) do
         if not isSessionActive() then break end
         if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then
-            -- Pause background plot actions while fighting for / holding the Gold Egg
-            continue
-        end
-
-        -- MUTEX GUARD: Pause secondary plot actions while in Dungeon, Arena, Frost, Quest, or Farm cycles
-        if isExecutingDungeon or isExecutingArena or isExecutingFrost or isExecutingQuest or isRunningMainQuest or isFarming or isSelling then
-            continue
-        end
-
-        local secRoot = getHRP()
-        if secRoot and secRoot.Position.X > 900 then
             continue
         end
 
         local now = tick()
 
         -- 1. Auto Buy Eggs Timer (Background non-blocking remote invocation)
-        if (S.autoBuyEgg or S.autoHatchEgg) and (now - lastEggBuyCheck >= (S.buyEggInterval or 5)) then
+        local isBusyEggCombat = (currentBossTarget and currentBossTarget.Parent and not currentBossTarget:GetAttribute("DiedAt"))
+            or (S.autoQuestOn and activeQuestHuntingZone and activeQuestHuntingZone > 0)
+            or isExecutingDungeon or isExecutingArena or isExecutingFrost or isSchedulerBusy or isAnyBlockingTaskActive()
+        if not isBusyEggCombat and (S.autoBuyEgg or S.autoHatchEgg) and (now - lastEggBuyCheck >= (S.buyEggInterval or 5)) then
             lastEggBuyCheck = now
             doBuyEggCycle(false)
         end
@@ -4196,57 +5546,36 @@ task.spawn(function()
         end
 
         -- 3. Auto Collect Hatched Pets Timer (Non-blocking)
-        if S.autoOpenAllEggs and (now - lastEggOpenCheck >= 4) then
-            lastEggOpenCheck = now
-            invoke(R.EggAction, "openAll")
+        if S.autoOpenAllEggs and (now - lastEggOpenCheck >= 5) then
+            local serverTime = workspace:GetServerTimeNow()
+            local cd = CachedData or getgenv().CachedData or {}
+            local hasReadyEgg = false
+            for _, nest in ipairs(cd.nests or {}) do
+                if (nest.t or 0) + (nest.d or 0) <= serverTime then
+                    hasReadyEgg = true
+                    break
+                end
+            end
+            if hasReadyEgg then
+                lastEggOpenCheck = now
+                invoke(R.EggAction, "openAll")
+            end
         end
 
-        -- 4. Pen Coin Collection Timer (Configurable interval, auto-warp to PenChest)
-        if S.autoPenCollect and (now - lastPenCollectCheck >= (S.penCollectInterval or 45)) and not isFarming and not isSelling then
-            lastPenCollectCheck = now
-            doPenCoinCollect(false)
-        end
-
-        -- 5. Auto Feed Animals Timer (Uses safe crops to feed hungry animals in pen)
-        if S.autoPenFeed and (now - lastPenFeedCheck >= (S.penFeedInterval or 25)) and not isFarming and not isSelling then
-            lastPenFeedCheck = now
-            doPenFeedCycle(false)
-        end
-
-        -- 6. Auto Card Gacha Timer (Warp to Card Shrine -> Buy Ticket & Pull 10x -> Return)
-        if S.autoCardPull and (now - lastCardPullCheck >= (S.cardPullInterval or 6)) and not isFarming and not isSelling then
-            lastCardPullCheck = now
-            doCardPullCycle(false)
-        end
-
-        -- 5. Fruit Tree Harvest Timer
-        if S.autoHarvestFruit and (now - lastFruitHarvestCheck >= (S.fruitInterval or 30)) and not isFarming and not isSelling then
-            lastFruitHarvestCheck = now
-            doFruitTreeHarvest(false)
-        end
-
-        -- 6. Equip Best Animals All Slots Timer
-        if S.autoEquipBestAll and (now - lastEquipBestCheck >= (S.equipBestInterval or 60)) and not isFarming and not isSelling then
+        -- 4. Equip Best Animals All Slots Timer (Non-blocking)
+        if S.autoEquipBestAll and (now - lastEquipBestCheck >= (S.equipBestInterval or 60)) then
             lastEquipBestCheck = now
             doEquipBestAll(false)
         end
 
-        -- 7. House Upgrade Timer (Checks if level and coins sufficient, warps and upgrades)
-        if S.autoUpgradeHouse and (now - lastHouseUpgradeCheck >= 30) and not isFarming and not isSelling then
-            lastHouseUpgradeCheck = now
-            doUpgradeHouse(false)
-        end
+        -- 5. Auto Refine Produce handled in cooperative maintenance if enabled
 
-        -- 8. Auto Refine Produce into Essence Timer
-        if S.autoRefineProduce and (now - lastRefineCheck >= 30) and not isFarming and not isSelling then
-            lastRefineCheck = now
-            doRefineAllProduce(false)
-        end
-
-        -- 9. Auto Buy Bed Groups Timer (Checks if coins sufficient for next 3x3 bed group, warps and buys)
-        if S.autoBuyBeds and (now - lastBedBuyCheck >= 20) and not isFarming and not isSelling then
-            lastBedBuyCheck = now
-            doBuyBedGroups(false)
+        -- 6. Auto Claim Halloween Daily Check-in, Quests & Milestones (Background Non-Blocking Remote)
+        if HW and HW.doHwDailyAndMilestones and (S.autoHwQuests or S.autoHwCheckin or S.autoHwTrack) and (now - (HW.lastHwClaimCheck or 0) >= 10) then
+            HW.lastHwClaimCheck = now
+            task.spawn(function()
+                HW.doHwDailyAndMilestones()
+            end)
         end
     end
 end)
@@ -4307,18 +5636,16 @@ local function set3DRendering(enabled)
 end
 
 -- Anti-AFK
-local function initAntiAFK()
-    trackConnection(plr.Idled:Connect(function()
-        if S.antiAFK then
-            pcall(function()
-                VirtualUser:CaptureController()
-                VirtualUser:ClickButton2(Vector2.new())
-            end)
-        end
-    end))
-end
-initAntiAFK()
+trackConnection(plr.Idled:Connect(function()
+    if S.antiAFK then
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end))
 
+do
 -- Timers for background tasks
 local afkTimer, webhookTimer, cardTimer = 0, 0, 0
 trackConnection(RunService.Heartbeat:Connect(function(dt)
@@ -4348,12 +5675,29 @@ trackConnection(RunService.Heartbeat:Connect(function(dt)
     end
 
     -- Update Gold Egg Paragraph in UI if visible
-    if goldEggStatusPara and goldEggStatusPara.SetDesc then
-        pcall(function() goldEggStatusPara:SetDesc(getGoldEggStatusString()) end)
+    if UI_Paras.goldEggStatusPara and UI_Paras.goldEggStatusPara.SetDesc then
+        pcall(function() UI_Paras.goldEggStatusPara:SetDesc(getGoldEggStatusString()) end)
+    end
+
+    -- Update Sprinkler Status Paragraph in UI if visible
+    if UI_Paras.sprinklerStatusPara and UI_Paras.sprinklerStatusPara.SetDesc and getSprinklerStatusString then
+        pcall(function() UI_Paras.sprinklerStatusPara:SetDesc(getSprinklerStatusString()) end)
+    end
+
+    -- Update Orchard Fruit Status Paragraph in UI if visible
+    if UI_Paras.orchardStatusPara and UI_Paras.orchardStatusPara.SetDesc and getOrchardFruitStatusString then
+        pcall(function() UI_Paras.orchardStatusPara:SetDesc(getOrchardFruitStatusString()) end)
+    end
+
+    -- Update Halloween Event Paragraph in UI if visible
+    if HW and HW.hwEventStatusPara and HW.hwEventStatusPara.SetDesc and HW.getHwEventStatusString then
+        pcall(function() HW.hwEventStatusPara:SetDesc(HW.getHwEventStatusString()) end)
     end
 end))
+end
 
 -- ===== BUILD WINDUI WINDOW =====
+local function initUI()
 local Win = WindUI:CreateWindow({
     Title       = "Beast Garden Hub",
     Author      = "made by ud0 Custom",
@@ -4376,6 +5720,7 @@ Win:Tag({
 -- ==============================================================================
 -- TAB 1: 🌾 FARM & MARKET
 -- ==============================================================================
+do
 local tFarm = Win:Tab({Title = "Farm & Market", Icon = "sprout"})
 
 tFarm:Section({Title = "Crop Farming"})
@@ -4385,7 +5730,7 @@ tFarm:Toggle({
     Value = false,
     Callback = function(v)
         S.autoFarm = v
-        if v then task.spawn(doRealFarmCycle) end
+        if v then lastCropCheck = 0 end
         logActivity(v and "Auto Farm Active" or "Auto Farm Stopped")
     end
 })
@@ -4482,7 +5827,7 @@ tFarm:Toggle({
     Value = false,
     Callback = function(v)
         S.autoBuyBeds = v
-        if v then task.spawn(function() doBuyBedGroups(true) end) end
+        if v then lastBedBuyCheck = 0 end
     end
 })
 
@@ -4499,8 +5844,30 @@ tFarm:Toggle({
     Value = false,
     Callback = function(v)
         S.autoWaterSprinkler = v
-        if v then task.spawn(function() doWateringSprinklerStep(true) end) end
+        if v then
+            lastSprinklerCheck = 0
+            task.spawn(function()
+                task.wait(0.1)
+                doWateringSprinklerStep(false)
+            end)
+        end
         logActivity(v and "Auto Watering Active" or "Auto Watering Stopped")
+    end
+})
+
+UI_Paras.sprinklerStatusPara = tFarm:Paragraph({
+    Title = "Sprinkler Live Status (สถานะเวลาสปริงเกลอร์)",
+    Desc  = getSprinklerStatusString()
+})
+
+tFarm:Slider({
+    Title = "Stack Sprinkler When Remaining Under (Minutes)",
+    Desc  = "ต่อเวลาเพิ่ม 1 รอบทันทีเมื่อเวลาเหลือน้อยกว่าที่ตั้งไว้ (ค่าเริ่มต้น 30 นาที)",
+    Step = 5,
+    Value = {Min = 5, Max = 55, Default = 30},
+    Min = 5, Max = 55, Default = 30,
+    Callback = function(v)
+        S.sprinklerThresholdMinutes = v
     end
 })
 
@@ -4511,6 +5878,15 @@ tFarm:Dropdown({
     Callback = function(v)
         local raw = tostring(v):match("^(%a+)") or "Rainbow"
         S.sprinklerType = raw
+        local count = getSprinklerInventoryCount(raw)
+        if count > 0 then
+            notify("Watering", string.format("เลือก %s (ในกระเป๋ามี %d ชิ้น) — กำลังเปลี่ยนสปริงเกลอร์...", raw, count))
+            task.spawn(function()
+                doWateringSprinklerStep(true)
+            end)
+        else
+            notify("Watering", string.format("เลือก %s แต่ในกระเป๋าไม่มี (0 ชิ้น)! กรุณาซื้อที่ร้านค้า หรือเปิด Auto Buy", raw))
+        end
     end
 })
 
@@ -4543,7 +5919,6 @@ tFarm:Toggle({
         S.autoBuySprinkler = v
         if v then
             lastSprinklerRestockId = -1
-            task.spawn(function() doWateringSprinklerStep(false) end)
         end
     end
 })
@@ -4558,11 +5933,12 @@ tFarm:Section({Title = "Market Selling (ขายผลผลิตทั้ง�
 
 tFarm:Toggle({
     Title = "Auto Sell ALL at Market (Auto Warp)",
-    Value = false,
+    Value = S.autoSellOn or false,
     Callback = function(v)
         S.autoSellOn = v
-        if v and getSellableProduceCount("ALL") > 0 then
-            task.spawn(function() doSellCycle("ALL", false) end)
+        -- Only trigger immediate sell if turning on AND player actually has sellable normal produce in bag!
+        if v and getSellableProduceCount(S.sellMode) > 0 then
+            lastSellCheck = 0
         end
     end
 })
@@ -4590,8 +5966,8 @@ tFarm:Toggle({
         S.autoPenCollect = v
         if not v then
             isCollectingCoins = false
-        elseif not isFarming and not isSelling then
-            task.spawn(function() doPenCoinCollect(false) end)
+        else
+            lastPenCollectCheck = 0
         end
     end
 })
@@ -4614,7 +5990,7 @@ tFarm:Toggle({
     Value = false,
     Callback = function(v)
         S.autoEquipBestAll = v
-        if v then task.spawn(function() doEquipBestAll(true) end) end
+        if v then lastEquipBestCheck = 0 end
     end
 })
 
@@ -4628,9 +6004,7 @@ tFarm:Toggle({
     Value = false,
     Callback = function(v)
         S.autoPenFeed = v
-        if v and not isFarming and not isSelling then
-            task.spawn(function() doPenFeedCycle(false) end)
-        end
+        if v then lastPenFeedCheck = 0 end
     end
 })
 
@@ -4665,8 +6039,22 @@ tFarm:Section({Title = "Orchard Fruit Trees & House Upgrade (สวนผลไ�
 
 tFarm:Toggle({
     Title = "Auto Harvest Fruit Trees",
-    Value = false,
-    Callback = function(v) S.autoHarvestFruit = v end
+    Value = S.autoHarvestFruit or false,
+    Callback = function(v)
+        S.autoHarvestFruit = v
+        if v then
+            lastFruitHarvestCheck = 0
+            local readyTrees = getReadyFruitTrees and getReadyFruitTrees()
+            if readyTrees and #readyTrees > 0 then
+                task.spawn(function() doFruitTreeHarvest(false) end)
+            end
+        end
+    end
+})
+
+UI_Paras.orchardStatusPara = tFarm:Paragraph({
+    Title = "Orchard Fruit Status (สถานะผลไม้ในสวน)",
+    Desc  = getOrchardFruitStatusString and getOrchardFruitStatusString() or "กำลังตรวจสอบ..."
 })
 
 tFarm:Slider({
@@ -4683,19 +6071,336 @@ tFarm:Button({
 })
 
 tFarm:Toggle({
+    Title = "Auto Buy Fruit Trees (ซื้อต้นไม้ผลอัตโนมัติเมื่อเงินถึง)",
+    Value = S.autoBuyTrees or false,
+    Callback = function(v) S.autoBuyTrees = v end
+})
+
+tFarm:Dropdown({
+    Title = "Fruit Trees to Buy (เลือกชนิดต้นไม้ที่ต้องการซื้อ - ซื้อต้นแพงสุดก่อน)",
+    Values = {
+        "StarFruit (180,000 Coins · Lv 26 · ต้นผลดาวสวรรค์)",
+        "Coconut (60,000 Coins · Lv 18 · ต้นมะพร้าวคริสตัล)",
+        "Mango (20,000 Coins · Lv 12 · ต้นมะม่วงน้ำผึ้ง)",
+        "Orange (6,000 Coins · Lv 6 · ต้นส้มทอง)",
+        "Apple (1,500 Coins · Lv 1 · ต้นแอปเปิ้ลแดง)"
+    },
+    Value = {
+        "StarFruit (180,000 Coins · Lv 26 · ต้นผลดาวสวรรค์)",
+        "Coconut (60,000 Coins · Lv 18 · ต้นมะพร้าวคริสตัล)",
+        "Mango (20,000 Coins · Lv 12 · ต้นมะม่วงน้ำผึ้ง)",
+        "Orange (6,000 Coins · Lv 6 · ต้นส้มทอง)",
+        "Apple (1,500 Coins · Lv 1 · ต้นแอปเปิ้ลแดง)"
+    },
+    Multi = true,
+    Callback = function(sel)
+        local tbl = {}
+        for _, item in ipairs(parseMultiDropdown(sel)) do
+            local clean = item:match("^([%w_]+)") or item
+            if clean and clean ~= "" then tbl[clean] = true end
+        end
+        S.selectedTreesToBuy = tbl
+    end
+})
+
+tFarm:Toggle({
+    Title = "Auto Plant Fruit Trees on Plot (นำต้นกล้าไปวางปลูกที่สวนอัตโนมัติ)",
+    Value = S.autoPlantTrees or true,
+    Callback = function(v) S.autoPlantTrees = v end
+})
+
+tFarm:Button({
+    Title = "Buy & Plant Fruit Trees Now (ซื้อและปลูกต้นไม้ผลทันที)",
+    Callback = function() task.spawn(function() doBuyAndPlantTreeStep(true) end) end
+})
+
+tFarm:Toggle({
     Title = "Auto Upgrade House (When Affordable)",
     Value = false,
-    Callback = function(v) S.autoUpgradeHouse = v end
+    Callback = function(v)
+        S.autoUpgradeHouse = v
+        if v then lastHouseUpgradeCheck = 0 end
+    end
 })
 
 tFarm:Button({
     Title = "Upgrade House Now",
     Callback = function() task.spawn(function() doUpgradeHouse(true) end) end
 })
+end
+
+-- ==============================================================================
+-- TAB: 🎃 PUMPKIN EVENT
+-- ==============================================================================
+do
+local tEvent = Win:Tab({Title = "Pumpkin Event 🎃", Icon = "flame"})
+
+tEvent:Section({Title = "Halloween Event Live Monitor"})
+HW.hwEventStatusPara = tEvent:Paragraph({
+    Title = "Pumpkin Festival Status",
+    Desc = (HW.getHwEventStatusString and HW.getHwEventStatusString()) or "Loading Event Data..."
+})
+
+tEvent:Section({Title = "Master Automation"})
+tEvent:Toggle({
+    Title = "Auto Pumpkin Festival Master",
+    Value = S.autoHalloweenMaster or false,
+    Callback = function(v)
+        S.autoHalloweenMaster = v
+        if v then
+            HW.lastHwCycleCheck = 0
+            logActivity("🎃 Pumpkin Festival Automation Activated! Running immediate cycle...", "Event")
+            notify("Pumpkin Event", "Started Event Automation!")
+            task.spawn(function()
+                if HW and HW.doHalloweenEventSequence then
+                    HW.doHalloweenEventSequence()
+                end
+            end)
+        else
+            logActivity("Pumpkin Festival Automation Stopped", "Event")
+        end
+    end
+})
+
+tEvent:Button({
+    Title = "Run Full Halloween Sequence Now 🎃",
+    Callback = function()
+        task.spawn(function()
+            if HW and HW.doHalloweenEventSequence then
+                HW.doHalloweenEventSequence(true)
+            end
+        end)
+    end
+})
+
+tEvent:Slider({
+    Title = "Event Cycle Sweep Interval (Seconds)",
+    Step = 5,
+    Value = {Min = 10, Max = 120, Default = 25},
+    Min = 10, Max = 120, Default = 25,
+    Callback = function(v) S.hwCycleInterval = v end
+})
+
+tEvent:Slider({
+    Title = "Target Event Seed Stock in Bag",
+    Step = 5,
+    Value = {Min = 10, Max = 50, Default = 20},
+    Min = 10, Max = 50, Default = 20,
+    Callback = function(v) S.hwTargetSeedStock = v end
+})
+
+tEvent:Section({Title = "1. Daily Check-In, Quests & Candy Track Milestones 🎁"})
+tEvent:Toggle({
+    Title = "Auto Daily Check-In",
+    Value = S.autoHwCheckin or true,
+    Callback = function(v) S.autoHwCheckin = v end
+})
+tEvent:Toggle({
+    Title = "Auto Claim Daily Quests",
+    Value = S.autoHwQuests or true,
+    Callback = function(v) S.autoHwQuests = v end
+})
+tEvent:Toggle({
+    Title = "Auto Claim Candy Track Milestones",
+    Value = S.autoHwTrack or true,
+    Callback = function(v) S.autoHwTrack = v end
+})
+tEvent:Button({
+    Title = "Claim Check-In, Quests & Track Now",
+    Callback = function()
+        task.spawn(function()
+            if HW.doHwDailyAndMilestones then HW.doHwDailyAndMilestones() end
+        end)
+    end
+})
+
+tEvent:Section({Title = "2. Glowing Pumpkin Map Spawns 🎃"})
+tEvent:Toggle({
+    Title = "Auto Sweep Glowing Pumpkins (Map Wide)",
+    Value = S.autoCollectGlowPumpkins or true,
+    Callback = function(v) S.autoCollectGlowPumpkins = v end
+})
+tEvent:Button({
+    Title = "Collect All Glow Pumpkins Now",
+    Callback = function()
+        task.spawn(function()
+            if HW.doCollectGlowPumpkins then HW.doCollectGlowPumpkins() end
+        end)
+    end
+})
+
+tEvent:Section({Title = "3. Witch Cooking Stove 🍲 (Cooks Before Selling)"})
+tEvent:Toggle({
+    Title = "Auto Cook Event Dishes",
+    Value = S.autoCookHwDishes or false,
+    Callback = function(v) S.autoCookHwDishes = v end
+})
+tEvent:Dropdown({
+    Title = "Event Dishes to Cook (Multi Selection)",
+    Values = {
+        "GhostPie (2x GhostPumpkin)",
+        "GarlicSoup (1x SilverGarlic, 1x GhostPumpkin)",
+        "BatPopcorn (2x BatCorn)",
+        "RoseTea (1x NightRose, 1x SilverGarlic)",
+        "MushroomStew (1x GhostMushroom, 1x BatCorn, 1x GhostPumpkin)"
+    },
+    Value = {"GhostPie (2x GhostPumpkin)"},
+    Multi = true,
+    Callback = function(sel)
+        local tbl = {}
+        for _, item in ipairs(parseMultiDropdown(sel)) do
+            local clean = item:match("^([%w_]+)") or item
+            if clean and clean ~= "" then tbl[clean] = true end
+        end
+        S.selectedHwDishes = tbl
+    end
+})
+tEvent:Button({
+    Title = "Cook Selected Dishes Now",
+    Callback = function()
+        task.spawn(function()
+            if HW.doHwCookingCycle then HW.doHwCookingCycle(true) end
+        end)
+    end
+})
+
+tEvent:Section({Title = "4. Witch Stall & Event Crops 🧙‍♀️ (Sell Leftovers & Seeds)"})
+tEvent:Toggle({
+    Title = "Auto Sell Event Crops for Red Crystals",
+    Value = S.autoSellHwProduce or true,
+    Callback = function(v) S.autoSellHwProduce = v end
+})
+tEvent:Button({
+    Title = "Sell All Event Crops Now",
+    Callback = function()
+        task.spawn(function()
+            if HW.openWitchStall and R.Halloween then
+                HW.openWitchStall()
+                task.wait(0.3)
+                pcall(function() R.Halloween:InvokeServer("sellCrops", nil) end)
+            end
+        end)
+    end
+})
+tEvent:Toggle({
+    Title = "Auto Buy Event Seeds at Witch Stall",
+    Value = S.autoBuyHwSeeds or true,
+    Callback = function(v) S.autoBuyHwSeeds = v end
+})
+tEvent:Dropdown({
+    Title = "Event Seeds to Buy & Plant (Top Tier / Most Expensive First)",
+    Values = {
+        "GhostMushroom (1,500 Coins · 18 Crystals · Lv 15)",
+        "NightRose (600 Coins · 7 Crystals · Lv 10)",
+        "BatCorn (300 Coins · 4 Crystals · Lv 6)",
+        "SilverGarlic (150 Coins · 2 Crystals · Lv 3)",
+        "GhostPumpkin (50 Coins · 1 Crystal · Lv 1)"
+    },
+    Value = {
+        "GhostMushroom (1,500 Coins · 18 Crystals · Lv 15)",
+        "NightRose (600 Coins · 7 Crystals · Lv 10)",
+        "BatCorn (300 Coins · 4 Crystals · Lv 6)",
+        "SilverGarlic (150 Coins · 2 Crystals · Lv 3)",
+        "GhostPumpkin (50 Coins · 1 Crystal · Lv 1)"
+    },
+    Multi = true,
+    Callback = function(sel)
+        local tbl = {}
+        for _, item in ipairs(parseMultiDropdown(sel)) do
+            local clean = item:match("^([%w_]+)") or item
+            if clean and clean ~= "" then tbl[clean] = true end
+        end
+        S.selectedHwSeeds = tbl
+    end
+})
+tEvent:Toggle({
+    Title = "Auto Plant Event Seeds First (Plot Priority)",
+    Value = S.autoPlantHwSeeds or true,
+    Callback = function(v) S.autoPlantHwSeeds = v end
+})
+tEvent:Button({
+    Title = "Harvest & Plant Event Crops Now (TP to Farm)",
+    Callback = function()
+        task.spawn(function()
+            if doRealFarmCycle then
+                logActivity("🎃 Manual Trigger: Harvesting & Planting event crops...", "Farm")
+                doRealFarmCycle()
+            end
+        end)
+    end
+})
+tEvent:Button({
+    Title = "Restock Event Seeds Now (TP to Witch Stall)",
+    Callback = function()
+        task.spawn(function()
+            if HW.doHwSeedsAndShopCycle then
+                logActivity("🎃 Manual Trigger: Restocking event seeds...", "Event")
+                HW.doHwSeedsAndShopCycle(true)
+            end
+        end)
+    end
+})
+
+tEvent:Section({Title = "5. Ghost Pumpkin Egg & Incubator 🥚"})
+tEvent:Toggle({
+    Title = "Auto Exchange Candy for Ghost Egg (100 Candy)",
+    Value = S.autoBuyHwEgg or true,
+    Callback = function(v) S.autoBuyHwEgg = v end
+})
+tEvent:Toggle({
+    Title = "Auto Exchange Crystals for Ghost Egg (200 Crystals)",
+    Value = S.autoBuyHwEggCrystal or false,
+    Callback = function(v) S.autoBuyHwEggCrystal = v end
+})
+tEvent:Toggle({
+    Title = "Auto Place Ghost Eggs into Farm Incubators",
+    Value = S.autoPlaceHwEgg or true,
+    Callback = function(v) S.autoPlaceHwEgg = v end
+})
+tEvent:Button({
+    Title = "Place Ghost Eggs in Incubators Now",
+    Callback = function()
+        task.spawn(function()
+            if HW.doHwPlaceEggCycle then HW.doHwPlaceEggCycle() end
+        end)
+    end
+})
+
+tEvent:Section({Title = "6. Witch Shop Items 🎃"})
+tEvent:Toggle({
+    Title = "Auto Buy Selected Witch Shop Items",
+    Value = S.autoBuyHwShop or false,
+    Callback = function(v) S.autoBuyHwShop = v end
+})
+tEvent:Dropdown({
+    Title = "Shop Items to Buy (Multi Selection)",
+    Values = {
+        "HW_JackOLantern (60 Crystals)",
+        "HW_Tombstone (80 Crystals)",
+        "HW_CandleCluster (100 Crystals)",
+        "HW_BatBunting (120 Crystals)",
+        "HW_HayPumpkins (160 Crystals)",
+        "HW_GraveFence (40 Crystals)",
+        "HW_CandyBucket (300 Crystals)",
+        "HW_GuideLantern (60 Crystals)"
+    },
+    Value = {},
+    Multi = true,
+    Callback = function(sel)
+        local tbl = {}
+        for _, item in ipairs(parseMultiDropdown(sel)) do
+            local clean = item:match("^([%w_]+)") or item
+            if clean and clean ~= "" then tbl[clean] = true end
+        end
+        S.selectedHwShopItems = tbl
+    end
+})
+end
 
 -- ==============================================================================
 -- TAB 2: ⚔️ COMBAT & BOSSES
 -- ==============================================================================
+do
 local tCombat = Win:Tab({Title = "Combat & Bosses", Icon = "swords"})
 
 tCombat:Section({Title = "Auto Farm Monsters (Dynamic Zone Filter)"})
@@ -4713,9 +6418,9 @@ do
                 if sel and sel:find(z.name, 1, true) then
                     S.warpZone = z.n
                     S.currentLocation = z.name
-                    if mobFilterDropdown and mobFilterDropdown.Refresh then
+                    if UI_Paras.mobFilterDropdown and UI_Paras.mobFilterDropdown.Refresh then
                         local zoneMobs = getMonstersForZone(z.n)
-                        mobFilterDropdown:Refresh(zoneMobs, {})
+                        UI_Paras.mobFilterDropdown:Refresh(zoneMobs, {})
                         S.selectedMonsters = {}
                     end
                     break
@@ -4726,7 +6431,7 @@ do
 end
 
 local initialZoneMobs = getMonstersForZone(1)
-mobFilterDropdown = tCombat:Dropdown({
+UI_Paras.mobFilterDropdown = tCombat:Dropdown({
     Title = "Target Monsters (Select Target - Multi)",
     Values = initialZoneMobs,
     Value = {},
@@ -4834,10 +6539,12 @@ tCombat:Toggle({
     Value = false,
     Callback = function(v) S.autoBossServerHop = v end
 })
+end
 
 -- ==============================================================================
 -- TAB 3: 📜 QUESTS & DUNGEONS
 -- ==============================================================================
+do
 local tQD = Win:Tab({Title = "Quests & Dungeons", Icon = "scroll"})
 
 tQD:Section({Title = "Main Quest Completer (เควสหลักอัตโนมัติ)"})
@@ -4866,6 +6573,9 @@ tQD:Toggle({
     Value = false,
     Callback = function(v)
         S.autoQuestOn = v
+        if not v then
+            activeQuestHuntingZone = nil
+        end
         if v then task.spawn(doUnifiedQuestCycle) end
     end
 })
@@ -4876,6 +6586,78 @@ tQD:Slider({
     Value = {Min = 15, Max = 120, Default = 30},
     Min = 15, Max = 120, Default = 30,
     Callback = function(v) S.questInterval = v end
+})
+
+tQD:Dropdown({
+    Title = "Quest Zone Mode (โหมดเลือกโซนเควส)",
+    Values = {
+        "Selected Zones (เลือกตามรายชื่อด้านล่าง)",
+        "Current Warp Zone Only (เฉพาะโซนที่ฟาร์มอยู่ + ฟาร์ม)",
+        "All Zones (ทุกโซนที่มี)"
+    },
+    Value = "Selected Zones (เลือกตามรายชื่อด้านล่าง)",
+    Callback = function(sel)
+        if type(sel) == "table" then sel = sel[1] end
+        S.questZoneMode = sel
+    end
+})
+
+do
+    local questZoneOpts = {
+        "Z0 - Farm Plot (เควสฟาร์ม)",
+        "Z1 - Meadow",
+        "Z2 - Shroom",
+        "Z3 - Crystal",
+        "Z4 - Storm",
+        "Z5 - Lava",
+        "Z6 - Desert",
+        "Z7 - Abyss",
+        "Z8 - Greed",
+        "Z9 - Clock"
+    }
+    tQD:Dropdown({
+        Title = "Select Quest Zones (เลือกโซนเควสที่ต้องการทำ - Multi Selection)",
+        Values = questZoneOpts,
+        Value = questZoneOpts,
+        Multi = true,
+        Callback = function(sel)
+            local tbl = {}
+            for _, item in ipairs(parseMultiDropdown(sel)) do
+                local zNum = item:match("Z(%d+)")
+                if zNum then
+                    local n = tonumber(zNum)
+                    tbl[n] = true
+                    tbl[tostring(n)] = true
+                    tbl["Z" .. n] = true
+                end
+            end
+            S.selectedQuestZones = tbl
+        end
+    })
+end
+
+tQD:Toggle({
+    Title = "Auto Zone Quests (ทำเควสโซน)",
+    Value = true,
+    Callback = function(v) S.autoZoneQuests = v end
+})
+
+tQD:Toggle({
+    Title = "Auto Daily Quests (เคลมเควสรายวัน)",
+    Value = true,
+    Callback = function(v) S.autoDailyQuests = v end
+})
+
+tQD:Toggle({
+    Title = "Auto Weekly Quests (เคลมเควสรายสัปดาห์)",
+    Value = true,
+    Callback = function(v) S.autoWeeklyQuests = v end
+})
+
+tQD:Toggle({
+    Title = "Auto Daily Login & Bonus Box (รับของขวัญประจำวัน)",
+    Value = true,
+    Callback = function(v) S.autoDailyLogin = v end
 })
 
 tQD:Button({
@@ -5003,10 +6785,12 @@ tQD:Button({
         end)
     end
 })
+end
 
 -- ==============================================================================
 -- TAB 4: 🐾 PETS, CARDS & GOLD EGG
 -- ==============================================================================
+do
 local tPets = Win:Tab({Title = "Pets & Cards", Icon = "paw-print"})
 
 tPets:Section({Title = "🥚 Fizz Gold Egg Event (Priority #1)"})
@@ -5046,7 +6830,7 @@ tPets:Button({
     end
 })
 
-goldEggStatusPara = tPets:Paragraph({
+UI_Paras.goldEggStatusPara = tPets:Paragraph({
     Title = "Gold Egg Status",
     Desc  = getGoldEggStatusString()
 })
@@ -5109,9 +6893,7 @@ tPets:Toggle({
     Value = false,
     Callback = function(v)
         S.autoCardPull = v
-        if v and not isFarming and not isSelling then
-            task.spawn(function() doCardPullCycle(false) end)
-        end
+        if v then lastCardPullCheck = 0 end
     end
 })
 
@@ -5137,7 +6919,7 @@ tPets:Button({
             local root = getHRP()
             local prevCF = root and root.CFrame
             if root then
-                root.CFrame = CFrame.new(POS_CARD_SHOP)
+                root.CFrame = CFrame.new(POS.CARD_SHOP)
                 task.wait(0.35)
             end
             local ok, res = invoke(R.CardShopAction, "buyticket")
@@ -5344,10 +7126,12 @@ tPets:Button({
     Title = "Refine All Produce to Essence Now",
     Callback = function() task.spawn(function() doRefineAllProduce(true) end) end
 })
+end
 
 -- ==============================================================================
 -- TAB 5: 📡 DISCORD LOGS (DEDICATED TAB)
 -- ==============================================================================
+do
 local tWebhook = Win:Tab({Title = "Discord Logs", Icon = "bell"})
 
 tWebhook:Section({Title = "Webhook Settings"})
@@ -5399,14 +7183,19 @@ tWebhook:Button({
 tWebhook:Divider()
 tWebhook:Section({Title = "Live Monospace Activity Log"})
 
-logCodeElement = tWebhook:Code({
+UI_Paras.logCodeElement = tWebhook:Code({
     Title = "Status Box",
     Code  = getDecoratedLogString()
 })
+end
 
 -- ==============================================================================
 -- TAB 6: ⚙️ SETTINGS & MISC
 -- ==============================================================================
+local currentToggleKey = Enum.KeyCode.RightControl
+local restoreHubWindow, toggleHubWindow
+
+do
 local tSet = Win:Tab({Title = "Settings & Misc", Icon = "settings"})
 
 tSet:Section({Title = "Multi-Function Priority Order"})
@@ -5455,22 +7244,23 @@ tSet:Paragraph({
 tSet:Divider()
 tSet:Section({Title = "Quick Town Teleports"})
 
-for _, w in ipairs(WARPS) do
-    local wc = w
-    tSet:Button({
-        Title = "Warp to " .. wc.label,
-        Callback = function()
-            invoke(R.QuickWarp, wc.id)
-            logActivity("Warped to " .. wc.label, wc.label)
-        end
-    })
+do
+    for _, w in ipairs(WARPS) do
+        tSet:Button({
+            Title = "Warp to " .. w.label,
+            Callback = function()
+                invoke(R.QuickWarp, w.id)
+                logActivity("Warped to " .. w.label, w.label)
+            end
+        })
+    end
 end
 
 tSet:Button({
     Title = "Warp to Quest NPC",
     Callback = function()
         local root = getHRP()
-        if root then root.CFrame = CFrame.new(POS_QUEST_NPC) end
+        if root then root.CFrame = CFrame.new(POS.QUEST_NPC) end
     end
 })
 
@@ -5489,31 +7279,33 @@ tSet:Button({
     Callback = function() saveConfig(S.configName) end
 })
 
-local cfgDropdown
-local cfgList = getAllConfigs()
-cfgDropdown = tSet:Dropdown({
-    Title = "Select Saved Config",
-    Values = cfgList,
-    Value = cfgList[1] or "default",
-    Callback = function(sel)
-        if type(sel) == "table" then sel = sel[1] end
-        if sel then S.configName = sel end
-    end
-})
+do
+    local cfgDropdown
+    local cfgList = getAllConfigs()
+    cfgDropdown = tSet:Dropdown({
+        Title = "Select Saved Config",
+        Values = cfgList,
+        Value = cfgList[1] or "default",
+        Callback = function(sel)
+            if type(sel) == "table" then sel = sel[1] end
+            if sel then S.configName = sel end
+        end
+    })
 
-tSet:Button({
-    Title = "Load Selected Config",
-    Callback = function() loadConfig(S.configName) end
-})
+    tSet:Button({
+        Title = "Load Selected Config",
+        Callback = function() loadConfig(S.configName) end
+    })
 
-tSet:Button({
-    Title = "Delete Selected Config",
-    Callback = function()
-        deleteConfig(S.configName)
-        local updated = getAllConfigs()
-        if cfgDropdown and cfgDropdown.SetValues then cfgDropdown:SetValues(updated) end
-    end
-})
+    tSet:Button({
+        Title = "Delete Selected Config",
+        Callback = function()
+            deleteConfig(S.configName)
+            local updated = getAllConfigs()
+            if cfgDropdown and cfgDropdown.SetValues then cfgDropdown:SetValues(updated) end
+        end
+    })
+end
 
 tSet:Toggle({
     Title = "Auto-Load on Startup",
@@ -5533,9 +7325,7 @@ tSet:Toggle({
 tSet:Divider()
 tSet:Section({Title = "Hub Controls & Credits"})
 
-local currentToggleKey = Enum.KeyCode.RightControl
-
-local function restoreHubWindow()
+restoreHubWindow = function()
     local hui = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
     local wGui = hui:FindFirstChild("WindUI") or plr.PlayerGui:FindFirstChild("WindUI")
     if not wGui then return end
@@ -5561,7 +7351,7 @@ local function restoreHubWindow()
     end)
 end
 
-local function toggleHubWindow()
+toggleHubWindow = function()
     local hui = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
     local wGui = hui:FindFirstChild("WindUI") or plr.PlayerGui:FindFirstChild("WindUI")
     if not wGui then return end
@@ -5642,6 +7432,7 @@ tSet:Paragraph({
     Title = "Beast Garden Hub",
     Desc  = "Author: made by ud0 Custom\nDiscord: discord.gg/axel hub\nSystem: " .. get_executor_name()
 })
+end
 
 -- ==============================================================================
 -- FLOATING TOGGLE BUTTON ("Icon เผื่อกดกลับมา") + DRAG & HOTKEY CONTROLLER
@@ -5774,6 +7565,8 @@ task.spawn(function()
         end
     end))
 end)
+end
+initUI()
 
 -- ===== INITIALIZATION DONE =====
 task.wait(0.3)
