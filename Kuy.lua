@@ -668,7 +668,8 @@ local function enableCombatHover(enable)
     local root = getHRP()
     if not root then return end
     if enable then
-        if not combatHoverBV or not combatHoverBV.Parent then
+        if not combatHoverBV or combatHoverBV.Parent ~= root then
+            if combatHoverBV then pcall(function() combatHoverBV:Destroy() end) end
             combatHoverBV = Instance.new("BodyVelocity")
             combatHoverBV.Name = "BG_CombatHover"
             combatHoverBV.Velocity = Vector3.new(0, 0, 0)
@@ -3553,6 +3554,14 @@ local function doColosseumStep(isManual)
         else
             local errStr = tostring(msg or "")
             logActivity("Colosseum: " .. (errStr ~= "" and errStr or "Cannot join duel now"), "Arena")
+        end
+
+        if S.autoFarm then
+            local center = getMyPlotCenter()
+            local root = getHRP()
+            if center and root then
+                root.CFrame = CFrame.new(center + Vector3.new(0, 1.8, 0))
+            end
         end
     end)
 
@@ -7552,6 +7561,12 @@ task.spawn(function()
                         winStartPos.Y.Scale,
                         winStartPos.Y.Offset + delta.Y
                     )
+                end
+            end))
+
+            trackConnection(UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    winDragging = false
                 end
             end))
         end
