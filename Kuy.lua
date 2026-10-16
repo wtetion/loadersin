@@ -385,6 +385,7 @@ end
 local POS_QUEST_NPC     = Vector3.new(-29.4, 7.6, -70.8)
 local POS_HATCHERY_PAD  = Vector3.new(-47.566, 3.2, -46.687)
 local POS_CARD_SHOP     = Vector3.new(72.88, 3.2, -2.85)
+local POS_SEED_SHOP     = Vector3.new(-72.88, 3.5, -2.85)
 local POS_TOWN_WARP     = Vector3.new(0, 3, -22)
 local POS_ARENA_BOARD   = Vector3.new(25.3, 4.55, -59.5)
 local POS_FROST_STATUE  = Vector3.new(-28, 2.1, -6)
@@ -418,6 +419,10 @@ local S = {
     plantSeedId       = "Carrot",
     selectedSeeds     = {"Carrot"},
     buyAmount         = 5,
+    autoWaterSprinkler= false,
+    sprinklerType     = "Rainbow",
+    autoBuySprinkler  = false,
+    selectedSprinklersToBuy = { ["Rainbow"] = true, ["Gold"] = true },
     autoSellOn        = false,
     autoSellSecs      = 45,
     sellMode          = "ALL",
@@ -436,6 +441,8 @@ local S = {
     -- Combat & Boss
     autoFarmMobs      = false,
     autoTargetMonster = false,
+    combatFloat       = true,
+    combatFloatHeight = 11,
     warpZone          = 1,
     selectedMonsters  = {},
     mobPriority       = "Closest First",
@@ -592,9 +599,29 @@ local function moveToCFrame(targetCF, onFinish)
     end
 end
 
--- 90° Combat Facing Positioner (Single Clean Warp, No Repeated Snaps)
+-- 90° Combat Facing Positioner (Single Clean Warp, No Repeated Snaps) + Safe Float/Hover Engine
 local currentCombatTarget = nil
 local lastCombatWarpTime = 0
+local combatHoverBV = nil
+
+local function enableCombatHover(enable)
+    local root = getHRP()
+    if not root then return end
+    if enable then
+        if not combatHoverBV or not combatHoverBV.Parent then
+            combatHoverBV = Instance.new("BodyVelocity")
+            combatHoverBV.Name = "BG_CombatHover"
+            combatHoverBV.Velocity = Vector3.new(0, 0, 0)
+            combatHoverBV.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+            combatHoverBV.Parent = root
+        end
+    else
+        if combatHoverBV then
+            pcall(function() combatHoverBV:Destroy() end)
+            combatHoverBV = nil
+        end
+    end
+end
 
 local function moveAndFaceMonster(targetPart, targetModel)
     local root = getHRP()
@@ -604,24 +631,36 @@ local function moveAndFaceMonster(targetPart, targetModel)
     local mobPos = targetPart.Position
     local dist = (root.Position - mobPos).Magnitude
 
-    -- If already engaged and within attack range, DO NOT re-teleport! Only smoothly orient facing
-    if currentCombatTarget == model and dist <= 14 and (tick() - lastCombatWarpTime < 4) then
+    local isFloat = (S.combatFloat ~= false)
+    local hoverHeight = tonumber(S.combatFloatHeight) or 11
+
+    if isFloat then
+        enableCombatHover(true)
+    else
+        enableCombatHover(false)
+    end
+
+    -- If already engaged and within attack range, DO NOT re-teleport! Only smoothly orient facing downwards
+    local maxEngageDist = isFloat and 14 or 12
+    if currentCombatTarget == model and dist <= maxEngageDist and (tick() - lastCombatWarpTime < 4) then
         currentCombatTarget = model
-        root.CFrame = CFrame.lookAt(root.Position, Vector3.new(mobPos.X, root.Position.Y, mobPos.Z))
+        root.CFrame = CFrame.lookAt(root.Position, mobPos)
         return
     end
 
     currentCombatTarget = model
     lastCombatWarpTime = tick()
-    local targetPos = mobPos + Vector3.new(0, 2.5, 4.0)
+
+    local targetPos
+    if isFloat then
+        -- Hover above monster in the air (Safely out of monster/boss melee & ground slam range, pets still shred!)
+        targetPos = mobPos + Vector3.new(0, hoverHeight, 2.0)
+    else
+        targetPos = mobPos + Vector3.new(0, 2.5, 4.0)
+    end
     local combatCF = CFrame.lookAt(targetPos, mobPos)
 
-    -- In combat, if in dungeon or far away, direct CFrame snap to avoid tween cancellations
-    if S.moveMode == "Tween" and dist < 50 and root.Position.X < 900 then
-        moveToCFrame(combatCF)
-    else
-        root.CFrame = combatCF
-    end
+    root.CFrame = combatCF
 end
 
 -- ===== FIZZ GOLDEN EGG STATE DETECTION =====
@@ -2244,6 +2283,7 @@ getgenv().BG_API = {
     syncWithGameConfig      = syncWithGameConfig,
     doSellCycle             = doSellCycle,
     getSellableProduceCount = getSellableProduceCount,
+    S                       = S,
 }
 
 -- ===== REAL WORKING COMBAT & MONSTER ENGINE (WITH TARGET PRIORITY & FALLBACK) =====
@@ -2413,32 +2453,38 @@ local function warpToZoneSafely(zoneNum)
     local campZ = zoneCampZ[num] or -158
     local campPos = zoneCampPositions[num] or Vector3.new(0, 5, campZ)
 
-    -- If already in zone (Z <= -100 to ensure we are not in town, and within 130 studs of zone camp)
-    if root.Position.Z <= -100 and math.abs(root.Position.Z - campZ) < 130 then
+    -- If already in zone: Must be past Town NorthGate (Z <= -130) and within 85 studs of zone camp
+    if root.Position.Z <= -130 and math.abs(root.Position.Z - campZ) < 85 then
         return true
     end
 
-    -- 1. Must stand at Town Warp Pad
-    moveToCFrame(CFrame.new(POS_TOWN_WARP))
-    task.wait(0.35)
+    -- Cancel active movement tween so it doesn't drag us back
+    if activeTween then
+        pcall(function() activeTween:Cancel() end)
+        activeTween = nil
+    end
+
+    -- 1. Direct teleport to Town Warp Pad
+    root.CFrame = CFrame.new(POS_TOWN_WARP)
+    task.wait(0.2)
 
     -- 2. Fire Warp Prompt if present
-    local hubSpawn = workspace:FindFirstChild("HubSpawn", true)
+    local hubSpawn = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Blockout") and workspace.Map.Blockout:FindFirstChild("Hub") and workspace.Map.Blockout.Hub:FindFirstChild("HubSpawn")
     local warpPrompt = hubSpawn and hubSpawn:FindFirstChildWhichIsA("ProximityPrompt")
     if warpPrompt then pcall(fireproximityprompt, warpPrompt) end
-    task.wait(0.15)
+    task.wait(0.1)
 
     -- 3. Invoke Warp remote with "Z" prefix
-    local ok, res, msg = pcall(function()
+    pcall(function()
         return invoke(R.Warp, "Z" .. tostring(num))
     end)
-    task.wait(0.8)
+    task.wait(0.4)
 
     -- 4. Fallback Verification: Ensure character actually made it to the target zone
     root = getHRP()
-    if root and (root.Position.Z > -100 or math.abs(root.Position.Z - campZ) > 130) then
+    if root and (root.Position.Z > -130 or math.abs(root.Position.Z - campZ) > 85) then
         root.CFrame = CFrame.new(campPos)
-        task.wait(0.35)
+        task.wait(0.25)
     end
 
     return true
@@ -2459,6 +2505,7 @@ local function doSingleMobStep()
         if S.autoTeamSkill then invoke(R.TeamSkill) end
         task.wait(0.25)
     else
+        enableCombatHover(false)
         currentCombatTarget = nil
         root = getHRP()
         local campZ = zoneCampZ[S.warpZone] or -158
@@ -2491,6 +2538,7 @@ local function doSingleBossStep()
         if S.autoTeamSkill then invoke(R.TeamSkill) end
         task.wait(0.2)
     else
+        enableCombatHover(false)
         currentBossTarget = nil
         if S.autoBossServerHop and next(S.selectedBosses) ~= nil then
             logActivity("No Boss Alive -> Server Hopping...", "Boss Hop")
@@ -2604,6 +2652,20 @@ local function getQuestTargetMob(def)
 end
 
 -- Helper: Auto-Claim & Auto-Accept Zone Quests (Hub + Zones 1..9)
+local lastMerchantVisit = 0
+local lastQuestClaimDebounce = {}
+
+local function closeQuestUI()
+    pcall(function()
+        local qp = plr.PlayerGui:FindFirstChild("QuestPanels")
+        local qFrame = qp and qp:FindFirstChild("Quest", true)
+        if qFrame then qFrame.Visible = false end
+    end)
+    pcall(function()
+        plr:SetAttribute("HudOpen", "")
+    end)
+end
+
 local function processZoneQuests(targetZoneToAccept, mode)
     openQuestMerchant()
 
@@ -2612,6 +2674,7 @@ local function processZoneQuests(targetZoneToAccept, mode)
     local zqData = getgenv().CachedData and getgenv().CachedData.zq or {}
 
     -- 1. CLAIM ALL COMPLETED ZONE QUESTS
+    local claimedAny = false
     for zoneNum = 0, 9 do
         local zKey = "Z" .. zoneNum
         local zInfo = zqData[zKey]
@@ -2633,25 +2696,57 @@ local function processZoneQuests(targetZoneToAccept, mode)
         if isReady then
             logActivity(string.format("Claiming Zone %d Quest", zoneNum), "Town")
             invoke(R.QuestAction, zoneNum, "claim")
+            lastQuestClaimDebounce[zoneNum] = tick()
             if claimBtn then pcall(firesignal, claimBtn.Activated) end
-            if zInfo then zInfo.on = false end
-            task.wait(0.25)
+            if zInfo then
+                zInfo.on = false
+                zInfo.p = 0 -- Reset progress immediately to stop claim loop!
+            end
+            claimedAny = true
+            task.wait(0.3)
         end
     end
 
     -- 2. ACCEPT QUESTS
     if mode == "all" or mode == "accept_all" then
-        for zoneNum = 0, 9 do
-            local zKey = "Z" .. zoneNum
-            local zInfo = zqData[zKey]
-            local acceptBtn = qFrame and qFrame:FindFirstChild("Accept_" .. zoneNum, true)
+        local activeCount = 0
+        for zn = 0, 9 do
+            local info = zqData["Z" .. zn]
+            if info and info.on then activeCount = activeCount + 1 end
+        end
 
-            local canAccept = (acceptBtn and acceptBtn.Visible) or (zInfo and not zInfo.on)
-            if canAccept then
-                logActivity(string.format("Accepting Zone %d Quest", zoneNum), "Town")
-                invoke(R.QuestAction, zoneNum, "accept")
-                if acceptBtn then pcall(firesignal, acceptBtn.Activated) end
-                task.wait(0.25)
+        local maxActive = tonumber(Config and Config.QuestMaxActive) or 3
+        if activeCount < maxActive then
+            local zonesToTry = {}
+            if S.warpZone and S.warpZone > 0 then
+                table.insert(zonesToTry, S.warpZone)
+            end
+            for zn = 0, 9 do
+                if zn ~= S.warpZone then table.insert(zonesToTry, zn) end
+            end
+
+            for _, zoneNum in ipairs(zonesToTry) do
+                if activeCount >= maxActive then break end
+                local zKey = "Z" .. zoneNum
+                local zInfo = zqData[zKey]
+                local acceptBtn = qFrame and qFrame:FindFirstChild("Accept_" .. zoneNum, true)
+                local canAccept = (acceptBtn and acceptBtn.Visible) or (zInfo and not zInfo.on)
+
+                if canAccept then
+                    logActivity(string.format("Accepting Zone %d Quest", zoneNum), "Town")
+                    local ok, success = pcall(function()
+                        return invoke(R.QuestAction, zoneNum, "accept")
+                    end)
+                    if acceptBtn then pcall(firesignal, acceptBtn.Activated) end
+                    if ok and success then
+                        if zInfo then
+                            zInfo.on = true
+                            zInfo.p = 0
+                        end
+                        activeCount = activeCount + 1
+                    end
+                    task.wait(0.3)
+                end
             end
         end
     elseif targetZoneToAccept ~= nil then
@@ -2661,8 +2756,47 @@ local function processZoneQuests(targetZoneToAccept, mode)
             logActivity(string.format("Accepting Target Zone %d Quest", zoneNum), "Town")
             invoke(R.QuestAction, zoneNum, "accept")
             if acceptBtn then pcall(firesignal, acceptBtn.Activated) end
-            task.wait(0.25)
+            local zInfo = zqData["Z" .. zoneNum]
+            if zInfo then
+                zInfo.on = true
+                zInfo.p = 0
+            end
+            task.wait(0.3)
         end
+    end
+
+    -- Close Quest UI
+    closeQuestUI()
+    task.wait(0.2)
+
+    -- 3. RESUME FARMING OR HUNTING (DO NOT REMAIN STUCK AT NPC!)
+    local nextMonsterZone = nil
+    for zn = 1, 9 do
+        local zi = zqData["Z" .. zn]
+        if zi and zi.on then
+            local def = getZoneQuestDef(zn, zi.i)
+            local need = getQuestTargetNeed(def)
+            if (zi.p or 0) < need then
+                nextMonsterZone = zn
+                break
+            end
+        end
+    end
+
+    if nextMonsterZone then
+        logActivity(string.format("Quest Accepted! Warping to Zone %d to hunt...", nextMonsterZone), "Quest")
+        warpToZoneSafely(nextMonsterZone)
+    elseif S.autoFarmMobs and S.warpZone then
+        logActivity(string.format("Resuming Mob Farm: Warping to Zone %d...", S.warpZone), "Combat")
+        warpToZoneSafely(S.warpZone)
+    elseif S.autoFarm then
+        logActivity("Resuming Crop Farm: Returning to Farm...", "Farm Plot")
+        invoke(R.QuickWarp, "Farm")
+        lastFarmTime = 0
+        task.wait(0.4)
+        task.spawn(doRealFarmCycle)
+    else
+        invoke(R.QuickWarp, "Farm")
     end
 end
 
@@ -2735,10 +2869,11 @@ local function doActiveZoneQuestStep()
 
     -- 1. Check if ANY active quest is finished and ready to claim
     local hasClaimable = false
+    local now = tick()
     for zoneNum = 0, 9 do
         local zKey = "Z" .. zoneNum
         local zInfo = zqData[zKey]
-        if zInfo and zInfo.on then
+        if zInfo and zInfo.on and (now - (lastQuestClaimDebounce[zoneNum] or 0) > 6) then
             local def = getZoneQuestDef(zoneNum, zInfo.i)
             local need = getQuestTargetNeed(def)
             if (zInfo.p or 0) >= need then
@@ -2794,11 +2929,17 @@ local function doActiveZoneQuestStep()
         end
     end
 
-    -- If no quest is active at all, go visit merchant to accept all
+    -- If no quest is active at all, go visit merchant with cooldown!
     if not pendingMonsterQuest and not pendingFarmQuest then
-        isExecutingQuest = true
-        processZoneQuests(nil, "all")
-        isExecutingQuest = false
+        local now = tick()
+        if now - lastMerchantVisit >= 45 then
+            lastMerchantVisit = now
+            isExecutingQuest = true
+            processZoneQuests(nil, "all")
+            isExecutingQuest = false
+            -- Return false so the main loop continues mob/crop farming immediately!
+            return false
+        end
         return false
     end
 
@@ -2818,12 +2959,13 @@ local function doActiveZoneQuestStep()
             if S.autoTeamSkill then invoke(R.TeamSkill) end
             task.wait(0.25)
         else
+            enableCombatHover(false)
             -- Move to zone camp spot to enter mob spawn range
             local campPos = zoneCampPositions[zNum]
             if campPos then
                 moveToCFrame(CFrame.new(campPos + Vector3.new(0, 3, 0)))
             end
-            task.wait(0.4)
+            task.wait(0.35)
         end
 
         isExecutingQuest = false
@@ -2919,71 +3061,211 @@ local function doColosseumStep(isManual)
 end
 
 -- ==============================================================================
--- ❄️ FROST TOWER / AZUREUS CHALLENGE ENGINE (STAND AT STATUE -> CHALLENGE)
+-- 💧 AUTO WATERING & SPRINKLER ENGINE (GEAR USE & AUTO BUY)
 -- ==============================================================================
-local isExecutingFrost = false
-local lastFrostCheck = 0
+local isExecutingSprinkler = false
+local lastSprinklerCheck = 0
 
-local function doFrostTowerStep(isManual)
-    if isExecutingFrost then return false end
+local function getActiveSprinklerRemaining()
+    if Config and Config.SprinklerActive and CachedData then
+        local nowServer = workspace:GetServerTimeNow()
+        local def, activeType, remSecs = Config.SprinklerActive(CachedData, nowServer)
+        if def and remSecs and remSecs > 0 then
+            return activeType, remSecs
+        end
+    end
+    return nil, 0
+end
+
+local function getSprinklerInventoryCount(sprinklerType)
+    if CachedData and CachedData.gear and type(CachedData.gear) == "table" then
+        return tonumber(CachedData.gear[sprinklerType]) or 0
+    end
+    return 0
+end
+
+local lastSprinklerRestockId = -1
+local lastSprinklerStockCheckTick = 0
+
+-- Check if any of user's selected sprinklers are in stock
+local function getAvailableSprinklersToBuy()
+    local list = {}
+    local cd = CachedData or getgenv().CachedData or {}
+    local myCoins = tonumber(cd.coins) or 0
+    local myFarmLevel = tonumber(cd.farmLevel) or 1
+    local now = workspace:GetServerTimeNow()
+    local restockId = Config.RestockId and Config.RestockId(now) or 0
+
+    local order = (Config.Sprinklers and Config.Sprinklers.Order) or {"Rainbow", "Gold", "Big", "Basic"}
+    for _, t in ipairs(order) do
+        -- Check if user selected this sprinkler in Multi-Dropdown
+        local isSelected = false
+        if S.selectedSprinklersToBuy then
+            if type(S.selectedSprinklersToBuy) == "table" then
+                if S.selectedSprinklersToBuy[t] == true or S.selectedSprinklersToBuy[t:lower()] == true then
+                    isSelected = true
+                else
+                    for _, v in ipairs(S.selectedSprinklersToBuy) do
+                        if tostring(v):lower():find(t:lower(), 1, true) then
+                            isSelected = true
+                            break
+                        end
+                    end
+                end
+            end
+        end
+
+        if isSelected then
+            local def = Config.Sprinklers and Config.Sprinklers.Types and Config.Sprinklers.Types[t]
+            if def and myFarmLevel >= (def.level or 1) and myCoins >= (def.price or 0) then
+                local stock = 0
+                if Config.GearStockLeft then
+                    local s, st = pcall(Config.GearStockLeft, cd, t, restockId)
+                    if s and type(st) == "number" then stock = st end
+                end
+                if stock > 0 then
+                    local canAffordCount = math.floor(myCoins / def.price)
+                    local buyCount = math.clamp(math.min(stock, canAffordCount), 1, 10)
+                    table.insert(list, {
+                        type = t,
+                        name = def.name or t,
+                        price = def.price,
+                        stock = stock,
+                        buyCount = buyCount
+                    })
+                end
+            end
+        end
+    end
+    return list
+end
+
+-- Buy sprinklers at shop with TP first
+local function buySprinklersBatchAtShop(itemsToBuy, isManual)
+    if not itemsToBuy or #itemsToBuy == 0 then return false end
+    local root = getHRP()
+    if not root then return false end
+
+    local prevCFrame = root.CFrame
+
+    logActivity(string.format("Stock available! Warping to Seed Shop (Buying %d sprinkler types)...", #itemsToBuy), "Watering")
+
+    -- 1. Must TP to Seed Shop first before calling remote!
+    invoke(R.QuickWarp, "SeedShop")
+    task.wait(0.4)
+    root = getHRP()
+    if root then
+        root.CFrame = CFrame.new(POS_SEED_SHOP)
+    end
+    task.wait(0.4)
+
+    local anyBought = false
+    local summary = {}
+
+    for _, it in ipairs(itemsToBuy) do
+        local ok, res, msg = invoke(R.FarmAction, "gearBuy", it.type, it.buyCount)
+        if ok and res then
+            anyBought = true
+            table.insert(summary, string.format("%s x%d", it.name or it.type, it.buyCount))
+        end
+        task.wait(0.3)
+    end
+
+    if anyBought then
+        local msg = "ซื้อสปริงเกลอร์สำเร็จ: " .. table.concat(summary, ", ")
+        notify("Watering", msg)
+        logActivity(msg, "Watering")
+    elseif isManual then
+        notify("Watering", "ไม่สามารถซื้อสปริงเกลอร์ได้ (เหรียญไม่พอ หรือหมดสต็อก)!")
+    end
+
+    task.wait(0.3)
+
+    -- If auto water is not active, return to previous position
+    if not S.autoWaterSprinkler and prevCFrame then
+        root = getHRP()
+        if root then
+            root.CFrame = prevCFrame
+        end
+    end
+
+    return anyBought
+end
+
+local function doWateringSprinklerStep(isManual)
+    if isExecutingSprinkler then return false end
+    if not isManual and (isExecutingDungeon or isExecutingArena or isExecutingFrost or isExecutingQuest or isRunningMainQuest or isFarming or isSelling) then
+        return false
+    end
     local now = tick()
-    if not isManual and (now - lastFrostCheck < 35) then return false end
-    lastFrostCheck = now
-    isExecutingFrost = true
+    if not isManual and (now - lastSprinklerCheck < 15) then return false end
+    lastSprinklerCheck = now
+    isExecutingSprinkler = true
 
     local s, err = pcall(function()
-        logActivity("Checking Frost Tower Altar...", "Frost Tower")
+        local serverNow = workspace:GetServerTimeNow()
+        local currentRestockId = Config.RestockId and Config.RestockId(serverNow) or 0
 
-        -- 1. Warp to Frost Altar
-        local root = getHRP()
-        if root then
-            moveToCFrame(CFrame.new(POS_FROST_STATUE + Vector3.new(0, 2, 0)))
-            task.wait(0.4)
-        end
-
-        -- 2. Fire Challenge Prompt
-        local promptHost = workspace:FindFirstChild("PromptHost", true)
-        local prompt = promptHost and promptHost:FindFirstChild("Challenge")
-        if prompt then
-            pcall(fireproximityprompt, prompt)
-            task.wait(0.35)
-        end
-
-        -- 3. Invoke FrostChallenge
-        local tier = math.clamp(tonumber(S.towerFloor) or 1, 1, 4)
-        local ok, res, msg = pcall(function()
-            return invoke(R.FrostChallenge, "start", tier)
-        end)
-
-        if ok and res == true then
-            logActivity(string.format("Entered Frost Challenge Tier %d! Fighting Azureus...", tier), "Frost Tower")
-            local t0 = tick()
-            while tick() - t0 < 60 and getgenv().BG_Running do
-                if not plr:GetAttribute("FrostFight") and tick() - t0 > 6 then
-                    break
+        -- 1. AUTO BUY SPRINKLERS (When Restock Resets or Manual)
+        if S.autoBuySprinkler or isManual then
+            local shouldCheckStock = isManual or (currentRestockId ~= lastSprinklerRestockId)
+            if shouldCheckStock then
+                lastSprinklerStockCheckTick = now
+                local itemsToBuy = getAvailableSprinklersToBuy()
+                if #itemsToBuy > 0 then
+                    lastSprinklerRestockId = currentRestockId
+                    buySprinklersBatchAtShop(itemsToBuy, isManual)
+                else
+                    -- No stock available for selected sprinklers! DO NOTHING!
+                    lastSprinklerRestockId = currentRestockId
+                    if isManual then
+                        notify("Watering", "สปริงเกลอร์ที่เลือกไม่มีสินค้าในสต็อก (รอร้านค้ารีสต็อก)!")
+                    end
                 end
-                local t = getBestTargetMonster(nil, "Azureus")
-                if t and t.part and not t.model:GetAttribute("DiedAt") then
-                    moveAndFaceMonster(t.part, t.model)
-                    if S.autoTeamSkill then invoke(R.TeamSkill) end
-                end
-                task.wait(0.3)
             end
-            logActivity("Frost Tower challenge concluded!", "Frost Tower")
-        else
-            local errStr = tostring(msg or "")
-            if errStr:find("ไททันหินหลอม") or errStr:find("เหมืองคริสตัล") then
-                logActivity("Frost Tower: Unlocks after defeating Magma Titan in Dungeon 3 (เหมืองคริสตัล)!", "Frost Tower")
+        end
+
+        -- 2. AUTO WATER CROPS (Activate Best Available Sprinkler at Farm)
+        if S.autoWaterSprinkler or isManual then
+            local activeType, remSecs = getActiveSprinklerRemaining()
+            if activeType and remSecs > 15 and not isManual then
+                -- Already active and watering
+                return
+            end
+
+            -- Find best available sprinkler in bag matching user preference or fallback
+            local preferredType = S.sprinklerType or "Rainbow"
+            local chosenType = nil
+
+            if getSprinklerInventoryCount(preferredType) > 0 then
+                chosenType = preferredType
             else
-                logActivity("Frost Tower: " .. (errStr ~= "" and errStr or "Cannot challenge now"), "Frost Tower")
+                -- Fallback to highest tier available in bag
+                for _, t in ipairs({"Rainbow", "Gold", "Big", "Basic"}) do
+                    if getSprinklerInventoryCount(t) > 0 then
+                        chosenType = t
+                        break
+                    end
+                end
+            end
+
+            if chosenType then
+                invoke(R.QuickWarp, "Farm")
+                task.wait(0.5)
+                local ok, res, msg = invoke(R.FarmAction, "gearUse", chosenType)
+                if ok and res then
+                    logActivity(string.format("Watering: Activated %s Sprinkler! Crops speed boosted.", chosenType), "Watering")
+                end
+            elseif isManual and not S.autoBuySprinkler then
+                notify("Watering", "ไม่มีสปริงเกลอร์ในกระเป๋า (เปิด Auto Buy หรือไปซื้อที่ร้านเมล็ด)!")
             end
         end
     end)
 
     if not s and err then
-        warn("[BG_Frost] Error: " .. tostring(err))
+        warn("[BG_Watering] Error: " .. tostring(err))
     end
-    isExecutingFrost = false
+    isExecutingSprinkler = false
     return true
 end
 
@@ -3190,21 +3472,17 @@ local function doDungeonCycle(targetDungeonKey, isManual)
                 end
 
                 local target = candidateMobs[1]
-                local mobPos = target.part.Position
-                local targetPos = mobPos + Vector3.new(0, 2.5, 4.0)
-
-                -- Instant snap directly in front of the monster!
-                root.CFrame = CFrame.lookAt(targetPos, mobPos)
-                currentCombatTarget = target.model
-                lastCombatWarpTime = tick()
-
+                moveAndFaceMonster(target.part, target.model)
                 if S.autoTeamSkill then invoke(R.TeamSkill) end
                 task.wait(0.35)
             else
+                enableCombatHover(false)
                 logActivity(string.format("Dungeon %s cleared! Returning to Farm...", dung.name), "Dungeon")
                 break
             end
         end
+
+        enableCombatHover(false)
 
         -- 5. Return to Farm
         task.wait(0.5)
@@ -3216,6 +3494,107 @@ local function doDungeonCycle(targetDungeonKey, isManual)
         warn("[BG_Dungeon] Error: " .. tostring(err))
     end
     isExecutingDungeon = false
+    return true
+end
+
+-- ==============================================================================
+-- ❄️ AUTO FROST TOWER / AZUREUS CHALLENGE (SLAY Z3 BOSS -> FROST GATE -> AZUREUS)
+-- ==============================================================================
+local isExecutingFrost = false
+local lastFrostCheck = 0
+
+local function isFrostGateOpen()
+    local gateExp = tonumber(plr:GetAttribute("FrostGate")) or 0
+    return (gateExp > workspace:GetServerTimeNow())
+end
+
+local function doFrostTowerStep(isManual)
+    if isExecutingFrost then return false end
+    local now = tick()
+    if not isManual and (now - lastFrostCheck < 25) then return false end
+    lastFrostCheck = now
+    isExecutingFrost = true
+
+    local s, err = pcall(function()
+        local tier = math.clamp(tonumber(S.towerFloor) or 1, 1, 4)
+        local gateOpen = isFrostGateOpen()
+
+        -- 1. If FrostGate is not open, we MUST kill MagmaTitan in Dungeon 3 (เหมืองคริสตัลลึก) first!
+        if not gateOpen then
+            logActivity("Frost Tower: Unlocking Frost Gate... Clearing Dungeon 3 (เหมืองคริสตัลลึก)...", "Frost Tower")
+            local savedTargetMode = S.dungeonTargetMode
+            S.dungeonTargetMode = "Boss Only"
+            pcall(function() doDungeonCycle("Dungeon3_CrystalMine", true) end)
+            S.dungeonTargetMode = savedTargetMode
+            task.wait(1.5)
+            gateOpen = isFrostGateOpen()
+        end
+
+        if not gateOpen then
+            logActivity("Frost Tower: Frost Gate did not open yet. Will retry Dungeon 3 next cycle.", "Frost Tower")
+            isExecutingFrost = false
+            return
+        end
+
+        -- 2. Frost Gate is active! Warp to Frost Gate Spot
+        local gateSpot = plr:GetAttribute("FrostGateSpot")
+        local root = getHRP()
+        if gateSpot and typeof(gateSpot) == "CFrame" and root then
+            logActivity("Frost Tower: Frost Gate is OPEN! Warping to Azureus Apparition...", "Frost Tower")
+            moveToCFrame(gateSpot + Vector3.new(0, 3, 0))
+            task.wait(0.6)
+
+            -- Fire proximity prompt if present on apparition
+            pcall(function()
+                local gateFx = workspace:FindFirstChild("FrostGateFx")
+                if gateFx then
+                    for _, p in ipairs(gateFx:GetDescendants()) do
+                        if p:IsA("ProximityPrompt") then
+                            fireproximityprompt(p)
+                            break
+                        end
+                    end
+                end
+            end)
+            task.wait(0.4)
+        end
+
+        -- 3. Invoke FrostChallenge "start"
+        logActivity(string.format("Challenging Azureus (Tier %d)...", tier), "Frost Tower")
+        local ok, res, msg = pcall(function()
+            return invoke(R.FrostChallenge, "start", tier)
+        end)
+
+        if ok and res == true then
+            logActivity(string.format("Entered Frost Arena Tier %d! Slaying Azureus...", tier), "Frost Tower")
+            local t0 = tick()
+            while tick() - t0 < 90 and getgenv().BG_Running do
+                if not plr:GetAttribute("FrostFight") and tick() - t0 > 6 then
+                    break
+                end
+                local t = getBestTargetMonster(nil, "Azureus")
+                if t and t.part and not t.model:GetAttribute("DiedAt") then
+                    moveAndFaceMonster(t.part, t.model)
+                    if S.autoTeamSkill then invoke(R.TeamSkill) end
+                end
+                task.wait(0.3)
+            end
+            enableCombatHover(false)
+            logActivity("Frost Tower: Azureus slain! Returning to Farm...", "Frost Tower")
+            task.wait(1.0)
+            pcall(function() invoke(R.FrostChallenge, "gateback") end)
+            task.wait(0.5)
+            invoke(R.QuickWarp, "Farm")
+        else
+            local errStr = tostring(msg or "")
+            logActivity("Frost Tower: " .. (errStr ~= "" and errStr or "Challenge rejected"), "Frost Tower")
+        end
+    end)
+
+    if not s and err then
+        warn("[BG_Frost] Error: " .. tostring(err))
+    end
+    isExecutingFrost = false
     return true
 end
 
@@ -3682,12 +4061,15 @@ local lastEggFillCheck      = tick()
 local lastEggOpenCheck      = tick()
 
 if type(getgenv().BG_API) == "table" then
-    getgenv().BG_API.doActiveZoneQuestStep = doActiveZoneQuestStep
-    getgenv().BG_API.doColosseumStep       = doColosseumStep
-    getgenv().BG_API.doFrostTowerStep      = doFrostTowerStep
-    getgenv().BG_API.doDungeonCycle        = doDungeonCycle
-    getgenv().BG_API.warpToZoneSafely      = warpToZoneSafely
-    getgenv().BG_API.doUnifiedQuestCycle   = doUnifiedQuestCycle
+    getgenv().BG_API.doActiveZoneQuestStep   = doActiveZoneQuestStep
+    getgenv().BG_API.doColosseumStep         = doColosseumStep
+    getgenv().BG_API.doFrostTowerStep        = doFrostTowerStep
+    getgenv().BG_API.doDungeonCycle          = doDungeonCycle
+    getgenv().BG_API.doWateringSprinklerStep = doWateringSprinklerStep
+    getgenv().BG_API.getAvailableSprinklersToBuy = getAvailableSprinklersToBuy
+    getgenv().BG_API.buySprinklersBatchAtShop = buySprinklersBatchAtShop
+    getgenv().BG_API.warpToZoneSafely        = warpToZoneSafely
+    getgenv().BG_API.doUnifiedQuestCycle     = doUnifiedQuestCycle
 end
 
 task.spawn(function()
@@ -3695,7 +4077,7 @@ task.spawn(function()
         if not isSessionActive() then break end
 
         -- Mutex: Prevent any overlapping teleports or conflicting workflows
-        if isFarming or isSelling or isExecutingDungeon or isExecutingArena or isExecutingFrost or isExecutingQuest or isRunningMainQuest then
+        if isFarming or isSelling or isExecutingDungeon or isExecutingArena or isExecutingFrost or isExecutingQuest or isRunningMainQuest or isExecutingSprinkler then
             task.wait(0.25)
             continue
         end
@@ -3722,6 +4104,11 @@ task.spawn(function()
             lastCropCheck = now
             doRealFarmCycle()
 
+            -- AUTO WATER CROPS (SPRINKLERS)
+            if S.autoWaterSprinkler or S.autoBuySprinkler then
+                task.spawn(function() doWateringSprinklerStep(false) end)
+            end
+
             -- AUTO FEED ANIMALS WITH FRESH PRODUCE BEFORE SELLING
             if S.autoPenFeed then
                 doPenFeedCycle(false)
@@ -3736,6 +4123,10 @@ task.spawn(function()
                 end
             end
 
+        -- PRIORITY 3.5: AUTO WATERING / SPRINKLER (CROP GROWTH BOOST & RESTOCK BUY)
+        elseif (S.autoWaterSprinkler or S.autoBuySprinkler) and (now - (lastSprinklerCheck or 0) >= 15) then
+            doWateringSprinklerStep(false)
+
         -- PRIORITY 4: COLOSSEUM / ARENA MATCH (DUEL AGAINST TRAINERS/PLAYERS)
         elseif S.autoColosseum and (now - lastArenaCheck >= 25) then
             doColosseumStep(false)
@@ -3749,15 +4140,12 @@ task.spawn(function()
             doDungeonCycle(S.selectedDungeon, false)
 
         -- PRIORITY 7: AUTO ZONE QUEST EXECUTION (WARP TO ZONE, HUNT MOBS, CLAIM AT NPC)
-        elseif S.autoQuestOn then
-            local didStep = doActiveZoneQuestStep()
-            if didStep then
-                task.wait(0.25)
-            end
+        elseif S.autoQuestOn and doActiveZoneQuestStep() then
+            task.wait(0.2)
 
         -- PRIORITY 8: AUTO MAIN QUEST (STORY PROGRESSION UNTIL FINISHED)
-        elseif S.autoMainQuest then
-            doMainQuestStep()
+        elseif S.autoMainQuest and doMainQuestStep() then
+            task.wait(0.2)
 
         -- STANDALONE AUTO SELL (WHEN CROP FARMING IS NOT ACTIVE)
         elseif S.autoSellOn and not S.autoFarm and (now - lastSellCheck >= (S.autoSellSecs or 45)) then
@@ -3974,7 +4362,10 @@ local Win = WindUI:CreateWindow({
     Size        = UDim2.fromOffset(640, 500),
     Transparent = true,
     Theme       = "YellowBlack",
+    Keybind     = Enum.KeyCode.RightControl,
 })
+pcall(function() Win:SetToggleKey(Enum.KeyCode.RightControl) end)
+getgenv().BG_Win = Win
 
 -- ONLY green discord.gg/axel hub tag (NO CLOCK TAG)
 Win:Tag({
@@ -4098,6 +4489,68 @@ tFarm:Toggle({
 tFarm:Button({
     Title = "Buy Available Bed Groups Now (Warp & Buy 3x3)",
     Callback = function() task.spawn(function() doBuyBedGroups(true) end) end
+})
+
+tFarm:Divider()
+tFarm:Section({Title = "💧 Watering & Sprinklers (รดน้ำ & สปริงเกลอร์เร่งโต)"})
+
+tFarm:Toggle({
+    Title = "Auto Water Crops (รดน้ำอัตโนมัติด้วยสปริงเกลอร์)",
+    Value = false,
+    Callback = function(v)
+        S.autoWaterSprinkler = v
+        if v then task.spawn(function() doWateringSprinklerStep(true) end) end
+        logActivity(v and "Auto Watering Active" or "Auto Watering Stopped")
+    end
+})
+
+tFarm:Dropdown({
+    Title = "Sprinkler Tier to Use (ระดับที่ใช้วางรดน้ำในแปลง)",
+    Values = {"Rainbow (สายรุ้ง +70%)", "Gold (ทอง +50%)", "Big (ใหญ่ +40%)", "Basic (ไม้ +30%)"},
+    Value = "Rainbow (สายรุ้ง +70%)",
+    Callback = function(v)
+        local raw = tostring(v):match("^(%a+)") or "Rainbow"
+        S.sprinklerType = raw
+    end
+})
+
+tFarm:Button({
+    Title = "Water Crops Now (เปิดสปริงเกลอร์รดน้ำทันที)",
+    Callback = function() task.spawn(function() doWateringSprinklerStep(true) end) end
+})
+
+tFarm:Dropdown({
+    Title = "Sprinklers to Buy (เลือกซื้อหลายอย่าง - Multi)",
+    Values = {"Rainbow (สายรุ้ง +70%)", "Gold (ทอง +50%)", "Big (ใหญ่ +40%)", "Basic (ไม้ +30%)"},
+    Value = {"Rainbow (สายรุ้ง +70%)", "Gold (ทอง +50%)"},
+    Multi = true,
+    Callback = function(sel)
+        S.selectedSprinklersToBuy = {}
+        for _, item in ipairs(parseMultiDropdown(sel)) do
+            local raw = tostring(item):match("^(%a+)")
+            if raw and raw ~= "" then
+                S.selectedSprinklersToBuy[raw] = true
+            end
+        end
+        lastSprinklerRestockId = -1
+    end
+})
+
+tFarm:Toggle({
+    Title = "Auto Buy Sprinklers (ตรวจซื้ออัตโนมัติเมื่อสต็อกรีเซ็ต)",
+    Value = false,
+    Callback = function(v)
+        S.autoBuySprinkler = v
+        if v then
+            lastSprinklerRestockId = -1
+            task.spawn(function() doWateringSprinklerStep(false) end)
+        end
+    end
+})
+
+tFarm:Button({
+    Title = "Buy Available Sprinklers Now (TP ร้านค้า & ซื้อสต็อกทันที)",
+    Callback = function() task.spawn(function() doWateringSprinklerStep(true) end) end
 })
 
 tFarm:Divider()
@@ -4295,9 +4748,26 @@ tCombat:Toggle({
 })
 
 tCombat:Toggle({
-    Title = "Auto Farm Monsters (Warp + 90° Attack)",
+    Title = "Auto Farm Monsters (Warp + Attack)",
     Value = false,
     Callback = function(v) S.autoFarmMobs = v end
+})
+
+tCombat:Toggle({
+    Title = "🛡️ Safe Float / Hover Farm (ตัวลอยเหนือมอน ไม่โดนบอสตีตาย)",
+    Value = true,
+    Callback = function(v)
+        S.combatFloat = v
+        if not v then enableCombatHover(false) end
+    end
+})
+
+tCombat:Slider({
+    Title = "Hover Height (ความสูงตัวลอยเหนือมอน)",
+    Step = 1,
+    Value = {Min = 6, Max = 16, Default = 11},
+    Min = 6, Max = 16, Default = 11,
+    Callback = function(v) S.combatFloatHeight = v end
 })
 
 tCombat:Toggle({
@@ -4454,7 +4924,7 @@ tQD:Button({
 })
 
 tQD:Divider()
-tQD:Section({Title = "Frost Tower / Azureus Challenge (แท่นผลึกน้ำแข็ง)"})
+tQD:Section({Title = "❄️ Auto Frost Boss / Azureus (ดันน้ำแข็ง - สับ Z3 ปลดล็อค)"})
 
 tQD:Slider({
     Title = "Target Tier (1-4)",
@@ -4465,7 +4935,7 @@ tQD:Slider({
 })
 
 tQD:Toggle({
-    Title = "Auto Frost Tower Challenge (ท้าสู้อาซูเรียสอัตโนมัติ)",
+    Title = "Auto Frost Boss (เคลียร์บอส Z3 -> เข้าตีดันน้ำแข็งอัตโนมัติ)",
     Value = false,
     Callback = function(v)
         S.autoTower = v
@@ -4473,7 +4943,7 @@ tQD:Toggle({
 })
 
 tQD:Button({
-    Title = "Start Selected Floor Now (ท้าสู้ทันที)",
+    Title = "Start Azureus Hunt Now (สับบอส Z3 ทันที -> เข้าห้องน้ำแข็ง)",
     Callback = function()
         task.spawn(function()
             doFrostTowerStep(true)
@@ -4482,7 +4952,7 @@ tQD:Button({
 })
 
 tQD:Button({
-    Title = "Exit Tower (Gate Back)",
+    Title = "Exit Tower / Gate Back (ออกจากห้องบอส)",
     Callback = function() invoke(R.FrostChallenge, "gateback") end
 })
 
@@ -5063,10 +5533,71 @@ tSet:Toggle({
 tSet:Divider()
 tSet:Section({Title = "Hub Controls & Credits"})
 
+local currentToggleKey = Enum.KeyCode.RightControl
+
+local function restoreHubWindow()
+    local hui = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+    local wGui = hui:FindFirstChild("WindUI") or plr.PlayerGui:FindFirstChild("WindUI")
+    if not wGui then return end
+
+    local winFolder = wGui:FindFirstChild("Window")
+    local frames = winFolder and winFolder:GetChildren() or {}
+    local f1 = frames[1] -- Main window frame
+    local f2 = frames[2] -- Minimized bar frame
+    local f1_scale = f1 and f1:FindFirstChildWhichIsA("UIScale")
+    local f2_scale = f2 and f2:FindFirstChildWhichIsA("UIScale")
+
+    wGui.Enabled = true
+    if f1 then
+        f1.Visible = true
+        if f1_scale then f1_scale.Scale = 1 end
+    end
+    if f2 then
+        f2.Visible = false
+        if f2_scale then f2_scale.Scale = 0 end
+    end
+    pcall(function()
+        if Win and Win.Open then Win:Open() end
+    end)
+end
+
+local function toggleHubWindow()
+    local hui = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+    local wGui = hui:FindFirstChild("WindUI") or plr.PlayerGui:FindFirstChild("WindUI")
+    if not wGui then return end
+
+    local winFolder = wGui:FindFirstChild("Window")
+    local frames = winFolder and winFolder:GetChildren() or {}
+    local f1 = frames[1]
+    local f2 = frames[2]
+    local f1_scale = f1 and f1:FindFirstChildWhichIsA("UIScale")
+
+    local isFullyOpen = wGui.Enabled and f1 and f1.Visible and (not f1_scale or f1_scale.Scale > 0.5) and (not f2 or not f2.Visible)
+
+    if isFullyOpen then
+        wGui.Enabled = false
+    else
+        restoreHubWindow()
+    end
+end
+
 tSet:Keybind({
     Title = "Toggle Hub UI Keybind",
-    Value = "RightAlt",
-    Callback = function() end
+    Value = "RightControl",
+    Callback = function(key)
+        if typeof(key) == "EnumItem" then
+            currentToggleKey = key
+        elseif typeof(key) == "string" and Enum.KeyCode[key] then
+            currentToggleKey = Enum.KeyCode[key]
+        end
+    end
+})
+
+tSet:Button({
+    Title = "👁️ Hide Hub Window (Press RightControl / Icon to Reopen)",
+    Callback = function()
+        toggleHubWindow()
+    end
 })
 
 tSet:Button({
@@ -5093,6 +5624,7 @@ tSet:Button({
     Title = "Destroy Hub UI",
     Callback = function()
         getgenv().BG_Running = false
+        enableCombatHover(false)
         if getgenv().BG_Connections then
             for _, c in ipairs(getgenv().BG_Connections) do pcall(function() c:Disconnect() end) end
         end
@@ -5112,7 +5644,7 @@ tSet:Paragraph({
 })
 
 -- ==============================================================================
--- FLOATING TOGGLE BUTTON ("Icon เผื่อกดกลับมา") + DRAG CONTROLLER
+-- FLOATING TOGGLE BUTTON ("Icon เผื่อกดกลับมา") + DRAG & HOTKEY CONTROLLER
 -- ==============================================================================
 task.spawn(function()
     local hui = (type(gethui) == "function" and gethui()) or game:GetService("CoreGui")
@@ -5169,11 +5701,9 @@ task.spawn(function()
         end
     end))
 
-    -- Toggle Window visibility on click
+    -- Toggle or Unminimize Window on Floating Button click
     floatBtn.MouseButton1Click:Connect(function()
-        if wGui then
-            wGui.Enabled = not wGui.Enabled
-        end
+        toggleHubWindow()
     end)
 
     pcall(function()
@@ -5183,19 +5713,36 @@ task.spawn(function()
         floatGui.Parent = plr:WaitForChild("PlayerGui")
     end
 
-    -- 2. Enhance Window Dragging for Main Window Frame
+    -- 2. Hook Minimized Bar (f2) so clicking it restores the main window instantly
     if wGui then
         local winFolder = wGui:FindFirstChild("Window")
-        local mainFrame = winFolder and winFolder:FindFirstChild("Frame")
-        if mainFrame then
-            local winDragging, winDragStart, winStartPos = false, nil, nil
-            trackConnection(mainFrame.InputBegan:Connect(function(input)
+        local frames = winFolder and winFolder:GetChildren() or {}
+        local f1 = frames[1]
+        local f2 = frames[2]
+
+        if f2 then
+            local miniBtn = f2:FindFirstChildWhichIsA("TextButton", true)
+            if miniBtn then
+                miniBtn.Size = UDim2.new(1, 0, 1, 0)
+                trackConnection(miniBtn.MouseButton1Click:Connect(restoreHubWindow))
+            end
+            trackConnection(f2.InputBegan:Connect(function(input)
                 if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                    local relY = input.Position.Y - mainFrame.AbsolutePosition.Y
+                    restoreHubWindow()
+                end
+            end))
+        end
+
+        -- Enhance Window Dragging for Main Window Frame
+        if f1 then
+            local winDragging, winDragStart, winStartPos = false, nil, nil
+            trackConnection(f1.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    local relY = input.Position.Y - f1.AbsolutePosition.Y
                     if relY <= 65 then
                         winDragging = true
                         winDragStart = input.Position
-                        winStartPos = mainFrame.Position
+                        winStartPos = f1.Position
                         input.Changed:Connect(function()
                             if input.UserInputState == Enum.UserInputState.End then
                                 winDragging = false
@@ -5208,7 +5755,7 @@ task.spawn(function()
             trackConnection(UserInputService.InputChanged:Connect(function(input)
                 if winDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                     local delta = input.Position - winDragStart
-                    mainFrame.Position = UDim2.new(
+                    f1.Position = UDim2.new(
                         winStartPos.X.Scale,
                         winStartPos.X.Offset + delta.X,
                         winStartPos.Y.Scale,
@@ -5218,6 +5765,14 @@ task.spawn(function()
             end))
         end
     end
+
+    -- 3. Global Keybind Listener for UI Toggle
+    trackConnection(UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == currentToggleKey or input.KeyCode == Enum.KeyCode.RightControl or input.KeyCode == Enum.KeyCode.RightAlt or input.KeyCode == Enum.KeyCode.Insert then
+            toggleHubWindow()
+        end
+    end))
 end)
 
 -- ===== INITIALIZATION DONE =====
