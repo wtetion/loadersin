@@ -576,9 +576,14 @@ local doCooperativeMaintenanceSequence = nil
 -- ===== HELPER FUNCTIONS =====
 local function invoke(remote, ...)
     if not remote then return false, "No remote" end
-    local args = {...}
-    local ok, a, b, c = pcall(function() return remote:InvokeServer(table.unpack(args)) end)
-    return ok and a, b, c
+    local args = table.pack(...)
+    local results = table.pack(pcall(function()
+        return remote:InvokeServer(table.unpack(args, 1, args.n))
+    end))
+    if not results[1] then
+        return false, results[2]
+    end
+    return table.unpack(results, 2, results.n)
 end
 
 local function fire(remote, ...)
@@ -1331,24 +1336,31 @@ local function getMyPlotBeds()
     for _, bed in ipairs(cropBeds:GetChildren()) do
         local cells = {}
         local seen = {}
+        local sumPos = Vector3.zero
         for _, ch in ipairs(bed:GetChildren()) do
             if ch.Name:find("^Cell_") then
                 local r, c = ch.Name:match("(%d+)_(%d+)")
                 if r and c and not seen[r .. "_" .. c] then
                     seen[r .. "_" .. c] = true
+                    local p = (ch:IsA("BasePart") and ch.Position)
+                        or (ch:IsA("Model") and ch:GetPivot().Position)
+                        or (ch:FindFirstChildWhichIsA("BasePart") and ch:FindFirstChildWhichIsA("BasePart").Position)
+                        or Vector3.zero
+                    sumPos = sumPos + p
                     table.insert(cells, {
                         name = ch.Name,
                         part = ch,
                         row = tonumber(r),
                         col = tonumber(c),
-                        pos = ch.Position
+                        pos = p
                     })
                 end
             end
         end
+        local bedCenter = (#cells > 0 and (sumPos / #cells)) or (bed:IsA("Model") and bed:GetPivot().Position) or (bed:IsA("BasePart") and bed.Position) or Vector3.zero
         table.insert(beds, {
             name = bed.Name,
-            center = bed:GetPivot().Position,
+            center = bedCenter,
             cells = cells
         })
     end
@@ -1447,11 +1459,13 @@ doRealFarmCycle = function()
         return
     end
 
-    -- Find crops folder for our plot
+    -- Robust crop folder discovery (supports Map.Crops, myPlot.Crops, and workspace.Crops)
     local plotName = myPlot and myPlot.Name or "Plot_1"
     local mapFolder = workspace:FindFirstChild("Map")
     local cropsRoot = mapFolder and mapFolder:FindFirstChild("Crops")
-    local plotCrops = cropsRoot and cropsRoot:FindFirstChild(plotName)
+    local plotCrops = (cropsRoot and cropsRoot:FindFirstChild(plotName))
+        or (myPlot and myPlot:FindFirstChild("Crops"))
+        or (workspace:FindFirstChild("Crops") and workspace.Crops:FindFirstChild(plotName))
 
     -- Phase 1: Pre-scan all beds BEFORE moving or warping! (Zero movement if nothing to do!)
     local bedsToProcess = {}
@@ -1508,186 +1522,221 @@ doRealFarmCycle = function()
     logActivity(string.format("Farm Sweep: %d Beds Need Work (%d Ripe, %d Empty)", #bedsToProcess, totalRipeCount, totalEmptyCount), "Farm Plot")
 
     if #bedsToProcess > 0 and getgenv().BG_Running then
-            -- Phase 2: Hybrid Seed Management (Event Seeds strictly capped at 18, then Normal Seeds for ALL remaining beds!)
-            local hwCropNames = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
-            local growingHwPlanted = 0
-            if plotCrops then
-                for _, c in ipairs(plotCrops:GetChildren()) do
-                    local id = c:GetAttribute("CropId") or c:GetAttribute("Crop") or c:GetAttribute("Seed") or c:GetAttribute("Id")
-                    if id and hwCropNames[id] then
-                        local stage = tonumber(c:GetAttribute("Stage")) or 0
-                        -- Only count crops still growing in the ground (< Stage 3)
-                        -- Any ripe crops (Stage >= 3) will be harvested in Sub-pass A, freeing up those slots!
-                        if stage < 3 then
-                            growingHwPlanted = growingHwPlanted + 1
-                        end
+        -- Phase 2: Hybrid Seed Management (Event Seeds strictly capped at 18, then Normal Seeds for ALL remaining beds!)
+        local hwCropNames = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
+        local growingHwPlanted = 0
+        if plotCrops then
+            for _, c in ipairs(plotCrops:GetChildren()) do
+                local id = c:GetAttribute("CropId") or c:GetAttribute("Crop") or c:GetAttribute("Seed") or c:GetAttribute("Id")
+                if id and hwCropNames[id] then
+                    local stage = tonumber(c:GetAttribute("Stage")) or 0
+                    -- Only count crops still growing in the ground (< Stage 3)
+                    -- Any ripe crops (Stage >= 3) will be harvested in Sub-pass A, freeing up those slots!
+                    if stage < 3 then
+                        growingHwPlanted = growingHwPlanted + 1
                     end
-                end
-            end
-
-            local maxHwAllowed = 18
-            local hwSlotsRemaining = 0
-            if S.autoHalloweenMaster and S.autoPlantHwSeeds then
-                hwSlotsRemaining = math.max(0, maxHwAllowed - growingHwPlanted)
-            end
-
-            -- 1. Halloween Seeds Pool (Strictly Most Expensive / Highest Tier First!)
-            local hwSeedsToUse = {}
-            if S.autoHalloweenMaster and S.autoPlantHwSeeds and S.selectedHwSeeds then
-                local hwOrder = { "GhostMushroom", "NightRose", "BatCorn", "SilverGarlic", "GhostPumpkin" }
-                for _, sName in ipairs(hwOrder) do
-                    if S.selectedHwSeeds[sName] then
-                        table.insert(hwSeedsToUse, sName)
-                    end
-                end
-                table.sort(hwSeedsToUse, function(a, b)
-                    return getSeedWorth(a) > getSeedWorth(b)
-                end)
-            end
-
-            -- 2. Normal Seeds Pool (Pure Normal crops - MUST NEVER contain any Halloween crop!)
-            local normalRaw = {}
-            local userNormalList = (S.selectedSeeds and #S.selectedSeeds > 0 and S.selectedSeeds) or { S.plantSeedId or "Carrot" }
-            for _, s in ipairs(userNormalList) do
-                if s and not hwCropNames[s] then
-                    table.insert(normalRaw, s)
-                end
-            end
-            if #normalRaw == 0 then
-                table.insert(normalRaw, "Carrot")
-            end
-            local normalSeedsToUse = {}
-            for _, s in ipairs(getSortedSeeds(normalRaw)) do
-                if s and not hwCropNames[s] then
-                    table.insert(normalSeedsToUse, s)
-                end
-            end
-            if #normalSeedsToUse == 0 then
-                normalSeedsToUse = { "Carrot" }
-            end
-
-            -- 3. Inventory counts
-            local seedsInBag = getInventorySeeds()
-            local bagCounts = {}
-            for _, sId in ipairs(hwSeedsToUse) do
-                bagCounts[sId] = tonumber(seedsInBag[sId]) or 0
-            end
-            local normalTotalHave = 0
-            for _, sId in ipairs(normalSeedsToUse) do
-                local c = tonumber(seedsInBag[sId]) or 0
-                bagCounts[sId] = c
-                normalTotalHave = normalTotalHave + c
-            end
-
-            -- 4. Auto-buy normal seeds if normal seed inventory is below remaining plot demand
-            local normalSlotsNeeded = math.max(0, totalSeedsNeeded - hwSlotsRemaining)
-            if normalSlotsNeeded > 0 and normalTotalHave < normalSlotsNeeded and (S.autoBuySeed or S.autoFarm) then
-                local neededTotal = normalSlotsNeeded - normalTotalHave
-                local buyQueue = {}
-                for _, sId in ipairs(normalSeedsToUse) do
-                    if normalTotalHave >= normalSlotsNeeded then break end
-                    local inStock = getSeedStockRemaining(sId)
-                    if inStock > 0 then
-                        local toBuy = math.min(neededTotal, inStock, math.max(S.buyAmount or 5, neededTotal))
-                        if toBuy > 0 then
-                            table.insert(buyQueue, { id = sId, amount = toBuy })
-                            normalTotalHave = normalTotalHave + toBuy
-                            neededTotal = normalSlotsNeeded - normalTotalHave
-                        end
-                    end
-                end
-                if #buyQueue > 0 then
-                    buySeedsBatch(buyQueue, false)
-                    seedsInBag = getInventorySeeds()
-                    for _, sId in ipairs(normalSeedsToUse) do
-                        bagCounts[sId] = tonumber(seedsInBag[sId]) or 0
-                    end
-                end
-            end
-
-            -- Phase 3: Bed-by-Bed Proximity Harvest & Hybrid Plant Sweep
-            local hwPointer = 1
-            local normalPointer = 1
-            local playerMoved = false
-
-            for _, bed in ipairs(bedsToProcess) do
-                if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
-                if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
-
-                root = getHRP()
-                if not root then break end
-
-                local distToBed = (root.Position - bed.center).Magnitude
-                if distToBed > 7 then
-                    root.CFrame = CFrame.new(bed.center + Vector3.new(0, 1.5, 0))
-                    playerMoved = true
-                    task.wait(0.06)
-                end
-
-                -- Sub-pass A: Harvest all ripe cells in this bed
-                local newlyEmptied = {}
-                for _, cell in ipairs(bed.ripeCells) do
-                    if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
-                    if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
-
-                    local ok, res = invoke(R.TillAction, "use", { cell.row, cell.col }, nil)
-                    table.insert(newlyEmptied, cell)
-                    task.wait(0.03)
-                end
-
-                -- Combine existing empty cells and newly harvested cells for planting
-                local cellsToPlant = {}
-                for _, c in ipairs(bed.emptyCells) do table.insert(cellsToPlant, c) end
-                for _, c in ipairs(newlyEmptied) do table.insert(cellsToPlant, c) end
-
-                -- Sub-pass B: Hybrid Planting (Event seeds strictly capped at 18 limit, then Normal seeds for ALL remaining beds!)
-                for _, cell in ipairs(cellsToPlant) do
-                    if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
-                    if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
-
-                    local chosenSeed = nil
-
-                    -- Priority 1: Plant Halloween seed ONLY if hwSlotsRemaining > 0 AND we have Halloween seeds in bag
-                    if hwSlotsRemaining > 0 and #hwSeedsToUse > 0 then
-                        while hwPointer <= #hwSeedsToUse and (bagCounts[hwSeedsToUse[hwPointer]] or 0) <= 0 do
-                            hwPointer = hwPointer + 1
-                        end
-                        if hwPointer <= #hwSeedsToUse then
-                            chosenSeed = hwSeedsToUse[hwPointer]
-                            bagCounts[chosenSeed] = bagCounts[chosenSeed] - 1
-                            hwSlotsRemaining = hwSlotsRemaining - 1
-                        end
-                    end
-
-                    -- Priority 2: Plant Normal seed into all other empty cells (Once Halloween reaches 18 cap or out of seeds!)
-                    if not chosenSeed then
-                        while normalPointer <= #normalSeedsToUse and (bagCounts[normalSeedsToUse[normalPointer]] or 0) <= 0 do
-                            normalPointer = normalPointer + 1
-                        end
-                        if normalPointer <= #normalSeedsToUse then
-                            chosenSeed = normalSeedsToUse[normalPointer]
-                            bagCounts[chosenSeed] = bagCounts[chosenSeed] - 1
-                        end
-                    end
-
-                    -- ONLY plant if we actually have a chosen seed available
-                    if chosenSeed and (not hwCropNames[chosenSeed] or hwSlotsRemaining >= 0) then
-                        fire(R.SelectSeed, chosenSeed)
-                        invoke(R.TillAction, "use", { cell.row, cell.col }, chosenSeed)
-                        task.wait(0.03)
-                    end
-                end
-            end
-
-            -- Phase 4: Only re-center if player somehow stepped far outside plot (> 50 studs)
-            if playerMoved and farmCenter then
-                root = getHRP()
-                if root and (root.Position - farmCenter).Magnitude > 50 then
-                    root.CFrame = CFrame.new(farmCenter)
-                    task.wait(0.1)
                 end
             end
         end
+
+        local maxHwAllowed = 18
+        local hwSlotsRemaining = 0
+        if S.autoHalloweenMaster and S.autoPlantHwSeeds then
+            hwSlotsRemaining = math.max(0, maxHwAllowed - growingHwPlanted)
+        end
+
+        -- 1. Halloween Seeds Pool (Strictly Most Expensive / Highest Tier First!)
+        local hwSeedsToUse = {}
+        if S.autoHalloweenMaster and S.autoPlantHwSeeds and S.selectedHwSeeds then
+            local hwOrder = { "GhostMushroom", "NightRose", "BatCorn", "SilverGarlic", "GhostPumpkin" }
+            for _, sName in ipairs(hwOrder) do
+                if S.selectedHwSeeds[sName] then
+                    table.insert(hwSeedsToUse, sName)
+                end
+            end
+            table.sort(hwSeedsToUse, function(a, b)
+                return getSeedWorth(a) > getSeedWorth(b)
+            end)
+        end
+
+        -- 2. Normal Seeds Pool (Pure Normal crops - MUST NEVER contain any Halloween crop!)
+        local normalRaw = {}
+        local userNormalList = (S.selectedSeeds and #S.selectedSeeds > 0 and S.selectedSeeds) or { S.plantSeedId or "Carrot" }
+        for _, s in ipairs(userNormalList) do
+            if s and not hwCropNames[s] then
+                table.insert(normalRaw, s)
+            end
+        end
+        if #normalRaw == 0 then
+            table.insert(normalRaw, "Carrot")
+        end
+        local normalSeedsToUse = {}
+        for _, s in ipairs(getSortedSeeds(normalRaw)) do
+            if s and not hwCropNames[s] then
+                table.insert(normalSeedsToUse, s)
+            end
+        end
+        if #normalSeedsToUse == 0 then
+            normalSeedsToUse = { "Carrot" }
+        end
+
+        -- 3. Inventory counts
+        local seedsInBag = getInventorySeeds()
+        local bagCounts = {}
+        local hwSeedsActuallyAvailable = 0
+        for _, sId in ipairs(hwSeedsToUse) do
+            local c = tonumber(seedsInBag[sId]) or 0
+            bagCounts[sId] = c
+            hwSeedsActuallyAvailable = hwSeedsActuallyAvailable + c
+        end
+        local normalTotalHave = 0
+        for _, sId in ipairs(normalSeedsToUse) do
+            local c = tonumber(seedsInBag[sId]) or 0
+            bagCounts[sId] = c
+            normalTotalHave = normalTotalHave + c
+        end
+
+        -- 4. Auto-buy normal seeds: Accurately calculate how many normal seeds are needed
+        -- based on real Halloween seeds in bag (not just abstract theoretical limit!)
+        local hwCanPlant = math.min(hwSlotsRemaining, hwSeedsActuallyAvailable)
+        local normalSlotsNeeded = math.max(0, totalSeedsNeeded - hwCanPlant)
+        if normalSlotsNeeded > 0 and normalTotalHave < normalSlotsNeeded and (S.autoBuySeed or S.autoFarm) then
+            local neededTotal = normalSlotsNeeded - normalTotalHave
+            local buyQueue = {}
+            for _, sId in ipairs(normalSeedsToUse) do
+                if normalTotalHave >= normalSlotsNeeded then break end
+                local inStock = getSeedStockRemaining(sId)
+                if inStock > 0 then
+                    local toBuy = math.min(neededTotal, inStock, math.max(S.buyAmount or 5, neededTotal))
+                    if toBuy > 0 then
+                        table.insert(buyQueue, { id = sId, amount = toBuy })
+                        normalTotalHave = normalTotalHave + toBuy
+                        neededTotal = normalSlotsNeeded - normalTotalHave
+                    end
+                end
+            end
+            if #buyQueue > 0 then
+                buySeedsBatch(buyQueue, false)
+                seedsInBag = getInventorySeeds()
+                for _, sId in ipairs(normalSeedsToUse) do
+                    bagCounts[sId] = tonumber(seedsInBag[sId]) or 0
+                end
+            end
+        end
+
+        -- Phase 3: Bed-by-Bed Direct Proximity Harvest & Hybrid Plant Sweep
+        local hwPointer = 1
+        local normalPointer = 1
+        local playerMoved = false
+        local currentEquippedSeed = nil
+
+        for _, bed in ipairs(bedsToProcess) do
+            if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
+            if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
+
+            root = getHRP()
+            if not root then break end
+
+            -- Always step directly inside bed centroid (tight 2.5 stud threshold guarantees player enters plot!)
+            local distToBed = (root.Position - bed.center).Magnitude
+            if distToBed > 2.5 then
+                root.CFrame = CFrame.new(bed.center.X, bed.center.Y + 2.0, bed.center.Z)
+                playerMoved = true
+                task.wait(0.06)
+            end
+
+            -- Sub-pass A: Harvest all ripe cells in this bed
+            local newlyEmptied = {}
+            for _, cell in ipairs(bed.ripeCells) do
+                if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
+                if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
+
+                -- Ensure player is right above the cell being harvested (<= 4 studs)
+                root = getHRP()
+                if root and (root.Position - cell.pos).Magnitude > 4.0 then
+                    root.CFrame = CFrame.new(cell.pos.X, cell.pos.Y + 2.0, cell.pos.Z)
+                    playerMoved = true
+                    task.wait(0.03)
+                end
+
+                local ok, res = invoke(R.TillAction, "use", { cell.row, cell.col }, nil)
+                if ok ~= false then
+                    table.insert(newlyEmptied, cell)
+                end
+                task.wait(0.04)
+            end
+
+            -- Combine existing empty cells and newly harvested cells for planting
+            local cellsToPlant = {}
+            for _, c in ipairs(bed.emptyCells) do table.insert(cellsToPlant, c) end
+            for _, c in ipairs(newlyEmptied) do table.insert(cellsToPlant, c) end
+
+            -- Sub-pass B: Hybrid Planting (Event seeds strictly capped at 18 limit, then Normal seeds for ALL remaining beds!)
+            for _, cell in ipairs(cellsToPlant) do
+                if not (S.autoFarm or (S.autoHalloweenMaster and S.autoPlantHwSeeds)) or not getgenv().BG_Running then break end
+                if S.autoGoldEgg and isGoldEggActive and isGoldEggActive() then break end
+
+                local chosenSeed = nil
+
+                -- Priority 1: Plant Halloween seed ONLY if hwSlotsRemaining > 0 AND we have Halloween seeds in bag
+                if hwSlotsRemaining > 0 and #hwSeedsToUse > 0 then
+                    while hwPointer <= #hwSeedsToUse and (bagCounts[hwSeedsToUse[hwPointer]] or 0) <= 0 do
+                        hwPointer = hwPointer + 1
+                    end
+                    if hwPointer <= #hwSeedsToUse then
+                        chosenSeed = hwSeedsToUse[hwPointer]
+                    end
+                end
+
+                -- Priority 2: Plant Normal seed into all other empty cells (Once Halloween reaches 18 cap or out of seeds!)
+                if not chosenSeed then
+                    while normalPointer <= #normalSeedsToUse and (bagCounts[normalSeedsToUse[normalPointer]] or 0) <= 0 do
+                        normalPointer = normalPointer + 1
+                    end
+                    if normalPointer <= #normalSeedsToUse then
+                        chosenSeed = normalSeedsToUse[normalPointer]
+                    end
+                end
+
+                -- ONLY plant if we actually have a chosen seed available
+                if chosenSeed then
+                    -- Step directly over target cell so server distance check is 100% satisfied
+                    root = getHRP()
+                    if root and (root.Position - cell.pos).Magnitude > 4.0 then
+                        root.CFrame = CFrame.new(cell.pos.X, cell.pos.Y + 2.0, cell.pos.Z)
+                        playerMoved = true
+                        task.wait(0.03)
+                    end
+
+                    -- Only fire SelectSeed when switching to a different seed type (eliminates rapid remote spam)
+                    if currentEquippedSeed ~= chosenSeed then
+                        fire(R.SelectSeed, chosenSeed)
+                        currentEquippedSeed = chosenSeed
+                        task.wait(0.05)
+                    end
+
+                    local ok, res = invoke(R.TillAction, "use", { cell.row, cell.col }, chosenSeed)
+                    if ok ~= false then
+                        -- Successfully placed seed! Decrement local inventory count and event slot
+                        bagCounts[chosenSeed] = math.max(0, (bagCounts[chosenSeed] or 1) - 1)
+                        if hwCropNames[chosenSeed] then
+                            hwSlotsRemaining = math.max(0, hwSlotsRemaining - 1)
+                        end
+                    end
+                    task.wait(0.04)
+                end
+            end
+        end
+
+        -- Phase 4: Only re-center if player somehow stepped far outside plot (> 50 studs)
+        if playerMoved and farmCenter then
+            root = getHRP()
+            if root and (root.Position - farmCenter).Magnitude > 50 then
+                root.CFrame = CFrame.new(farmCenter)
+                task.wait(0.1)
+            end
+        end
+    end
 
     isFarming = false
 end
@@ -2015,7 +2064,7 @@ local function doBuyAndPlantTreeStep(isManual)
         for _ in pairs(trees) do
             currentTreeCount = currentTreeCount + 1
         end
-        local maxTrees = (Config.Orchard and Config.Orchard.MaxTrees) or 9
+        local maxTrees = (Config and type(Config.TreeLimit) == "function" and Config.TreeLimit(tonumber(cd.farmLevel) or 1)) or 9
 
         -- PHASE 1: Plant any saplings already in bag
         local saplings = cd.saplings or {}
@@ -2358,7 +2407,8 @@ local function doFillIncubatorCycle(force)
     isFillingIncubator = true
 
     pcall(function()
-        local eggBag = getgenv().CachedData and getgenv().CachedData.eggBag or {}
+        local cd = CachedData or getgenv().CachedData or {}
+        local eggBag = cd.eggBag or {}
         local eggsToPlace = {}
         if S.selectedEggsToPlace and next(S.selectedEggsToPlace) ~= nil then
             for _, item in ipairs(parseMultiDropdown(S.selectedEggsToPlace)) do
@@ -4707,6 +4757,54 @@ local function restoreCombatCheckpoint()
     end
 end
 
+local function canFeedAnyPenAnimals()
+    local cd = CachedData or getgenv().CachedData or {}
+    local penList = cd.pen
+    if not penList or type(penList) ~= "table" or #penList == 0 then return false end
+    local produce = cd.produce
+    if not produce or type(produce) ~= "table" or next(produce) == nil then return false end
+
+    local anyFood = false
+    local hwCropNames = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
+    for cropId, count in pairs(produce) do
+        local n = tonumber(count) or 0
+        local baseCrop = tostring(cropId):match("^([^:]+)") or tostring(cropId)
+        if n > 0 and not hwCropNames[baseCrop] then
+            anyFood = true
+            break
+        end
+    end
+    if not anyFood then return false end
+
+    local penLv = cd.penLv or 1
+    for _, uid in ipairs(penList) do
+        local a = cd.animals and cd.animals[uid]
+        if a then
+            local maxFd = (Config and Config.PenFoodMax and Config.PenFoodMax(a, penLv)) or 1000
+            local curFd = tonumber(a.fd) or 0
+            if (maxFd - curFd) > 10 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function getRefinableProduceCount()
+    local cd = CachedData or getgenv().CachedData or {}
+    local p = cd.produce or {}
+    local hwCrops = { GhostPumpkin = true, SilverGarlic = true, BatCorn = true, NightRose = true, GhostMushroom = true }
+    local total = 0
+    for cropId, count in pairs(p) do
+        local n = tonumber(count) or 0
+        local baseCrop = tostring(cropId):match("^([^:]+)") or tostring(cropId)
+        if n > 0 and not hwCrops[baseCrop] then
+            total = total + n
+        end
+    end
+    return total
+end
+
 HW.canUpgradeHouse = function()
     local myPlot = getMyPlot()
     local plotName = myPlot and myPlot.Name
@@ -4730,7 +4828,7 @@ HW.canDoAnyTreeWork = function()
     for _ in pairs(trees) do
         currentTreeCount = currentTreeCount + 1
     end
-    local maxTrees = (Config and Config.Orchard and Config.Orchard.MaxTrees) or 9
+    local maxTrees = (Config and type(Config.TreeLimit) == "function" and Config.TreeLimit(tonumber(cd.farmLevel) or 1)) or 9
 
     -- Check if any saplings in bag can be planted
     if S.autoPlantTrees and currentTreeCount < maxTrees then
@@ -4807,6 +4905,9 @@ shouldRunMaintenance = function(now)
     if S.autoSellOn and getSellableProduceCount(S.sellMode) > 0 and (now - lastSellCheck >= (S.autoSellSecs or 30)) then
         return true
     end
+    if S.autoPenFeed and (now - lastPenFeedCheck >= (S.penFeedInterval or 20)) and canFeedAnyPenAnimals and canFeedAnyPenAnimals() then
+        return true
+    end
     if S.autoPenCollect and (now - lastPenCollectCheck >= (S.penCollectInterval or 35)) then
         local bank = tonumber(CachedData and CachedData.penBank and CachedData.penBank.bank) or 0
         if bank > 0 then
@@ -4837,6 +4938,9 @@ shouldRunMaintenance = function(now)
         end
     end
     if S.autoCardPull and canPullAnyCards and canPullAnyCards() and (now - lastCardPullCheck >= (S.cardPullInterval or 15)) then
+        return true
+    end
+    if S.autoRefineProduce and (now - lastRefineCheck >= 30) and getRefinableProduceCount and getRefinableProduceCount() > 0 then
         return true
     end
     if S.autoUpgradeHouse and (now - lastHouseUpgradeCheck >= 30) and HW.canUpgradeHouse() then
@@ -4924,6 +5028,13 @@ doCooperativeMaintenanceSequence = function()
             HW.openWitchStall()
             task.wait(0.3)
             pcall(function() R.Halloween:InvokeServer("sellCrops", nil) end)
+            task.wait(0.2)
+        end
+
+        -- STEP 7.8: REFINE PRODUCE AT ALCHEMY TOWER (BEFORE MARKET SELL)
+        if S.autoRefineProduce and (now - lastRefineCheck >= 30) and getRefinableProduceCount and getRefinableProduceCount() > 0 then
+            lastRefineCheck = now
+            doRefineAllProduce(false)
             task.wait(0.2)
         end
 
@@ -5314,23 +5425,35 @@ HW.doHwCookingCycle = function(isForce)
 
     local cookedTotal = 0
     local cd = CachedData or getgenv().CachedData or {}
+    local maxBatch = (Config and Config.Feeding and Config.Feeding.BatchMax) or 10
     for _, dishId in ipairs(dishesToTry) do
         while getgenv().BG_Running and (isForce or S.autoCookHwDishes) do
-            if not HW.canCookHwDish(dishId) then break end
-            local cOk, cSuccess, cMsg = pcall(function() return R.Feeding:InvokeServer("cook", dishId, 1) end)
+            local recipe = HW.RECIPES[dishId]
+            if not recipe then break end
+            local p = cd.produce or {}
+            local maxPossible = 999
+            for _, ing in ipairs(recipe) do
+                local cName, needed = ing[1], ing[2]
+                local available = tonumber(p[cName]) or 0
+                local canMake = math.floor(available / math.max(1, needed))
+                if canMake < maxPossible then maxPossible = canMake end
+            end
+            if maxPossible <= 0 then break end
+            local batchCount = math.clamp(math.min(maxPossible, maxBatch), 1, 10)
+
+            local cOk, cSuccess, cMsg = pcall(function() return R.Feeding:InvokeServer("cook", dishId, batchCount) end)
             if cOk and cSuccess ~= false then
-                cookedTotal = cookedTotal + 1
-                logActivity("🍲 Cooked Event Dish: " .. dishId, "Cooking")
-                notify("Cooking", "ทำอาหารสำเร็จ: " .. dishId)
+                cookedTotal = cookedTotal + batchCount
+                logActivity(string.format("🍲 Cooked Event Dish: %s x%d", dishId, batchCount), "Cooking")
+                notify("Cooking", string.format("ปรุงอาหารสำเร็จ: %s x%d", dishId, batchCount))
                 -- Deduct locally from cd.produce
-                local recipe = HW.RECIPES[dishId] or {}
                 for _, ing in ipairs(recipe) do
-                    local cName, amt = ing[1], ing[2]
+                    local cName, amt = ing[1], ing[2] * batchCount
                     if cd.produce and cd.produce[cName] then
                         cd.produce[cName] = math.max(0, (tonumber(cd.produce[cName]) or 0) - amt)
                     end
                 end
-                task.wait(0.4)
+                task.wait(0.35)
             else
                 break
             end
